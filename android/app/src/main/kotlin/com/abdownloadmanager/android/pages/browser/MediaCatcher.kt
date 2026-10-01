@@ -65,10 +65,10 @@ class MediaCatcher {
             )
     }
 
-    fun getStreamCandidates(tabId: ABDMBrowserTabId): List<MediaCandidate> {
+    fun getExtractorCandidates(tabId: ABDMBrowserTabId): List<MediaCandidate> {
         return _candidates.value[tabId]
             .orEmpty()
-            .filter { it.kind.isManifest }
+            .filterNot { it.kind.isDirectlyDownloadable }
             .distinctBy { it.request.url }
     }
 
@@ -98,8 +98,8 @@ enum class MediaKind(
 ) {
     VIDEO_FILE(true, false, 0),
     AUDIO_FILE(true, false, 1),
-    VIDEO_TRACK(true, false, 2),
-    AUDIO_TRACK(true, false, 3),
+    VIDEO_TRACK(false, false, 2),
+    AUDIO_TRACK(false, false, 3),
     HLS_MANIFEST(false, true, 4),
     DASH_MANIFEST(false, true, 5);
 
