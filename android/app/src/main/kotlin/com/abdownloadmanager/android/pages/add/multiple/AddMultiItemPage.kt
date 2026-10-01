@@ -9,12 +9,14 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.abdownloadmanager.android.pages.add.shared.CategoryAddButton
 import com.abdownloadmanager.android.pages.add.shared.CategorySelect
 import com.abdownloadmanager.android.pages.add.shared.ExtraConfig
 import com.abdownloadmanager.android.pages.add.shared.LocationTextField
 import com.abdownloadmanager.android.pages.add.shared.ShowAddToQueueDialog
+import com.abdownloadmanager.android.pages.browser.BrowserActivity
 import com.abdownloadmanager.android.ui.RenderControlSelections
 import com.abdownloadmanager.android.ui.SelectionControlButton
 import com.abdownloadmanager.android.ui.page.PageHeader
@@ -131,7 +133,15 @@ fun Footer(
                 .padding(horizontal = 16.dp)
                 .padding(vertical = 16.dp),
         ) {
+            val context = LocalContext.current
             val total = component.totalList.size
+            val visibleItems by component.filteredList.collectAsState()
+            val selectedItems = visibleItems.filter { it.id in component.selectionList }
+            val selectedWebPageLinks = selectedItems
+                .filter { it.isWebPage }
+                .map { it.link }
+                .distinct()
+            val hasDirectSelection = selectedItems.any { !it.isWebPage }
             val showMoreOptions by component.showMoreOptions.collectAsState()
             RenderControlSelections(
                 onRequestSelectAll = { component.selectAll(true) },
@@ -183,6 +193,21 @@ fun Footer(
                 }
             }
             Spacer(Modifier.height(8.dp))
+            if (selectedWebPageLinks.isNotEmpty()) {
+                ActionButton(
+                    text = myStringResource(Res.string.open_in_browser),
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        context.startActivity(
+                            BrowserActivity.createIntent(
+                                context = context,
+                                urls = selectedWebPageLinks,
+                            )
+                        )
+                    },
+                )
+                Spacer(Modifier.height(8.dp))
+            }
             Row(
                 Modifier
             ) {
@@ -193,7 +218,7 @@ fun Footer(
                     onClick = {
                         component.requestDownloadAll()
                     },
-                    enabled = component.canClickAdd,
+                    enabled = hasDirectSelection,
                 )
                 Spacer(Modifier.width(8.dp))
                 PrimaryMainActionButton(
@@ -204,7 +229,7 @@ fun Footer(
                     onLongClick = {
                         component.selectQueueComponent.fastConfirm()
                     },
-                    enabled = component.canClickAdd,
+                    enabled = hasDirectSelection,
                     modifier = buttonModifier,
                 )
                 Spacer(Modifier.width(8.dp))
