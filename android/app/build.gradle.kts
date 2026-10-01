@@ -52,6 +52,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.decompose.jbCompose)
     implementation(libs.aboutLibraries.core)
+    implementation(libs.youtubedlAndroid.library)
     implementation(project(":shared:app"))
     ksp(libs.arrow.opticKsp)
 }
