@@ -3,6 +3,7 @@ package com.abdownloadmanager.android.pages.browser
 import android.webkit.CookieManager
 import com.abdownloadmanager.android.ui.widget.WebViewState
 import com.abdownloadmanager.shared.pages.adddownload.AddDownloadCredentialsInUiProps
+import ir.amirab.downloader.downloaditem.hls.HLSDownloadCredentials
 import ir.amirab.downloader.downloaditem.http.HttpDownloadCredentials
 import ir.amirab.util.HttpUrlUtils
 import kotlinx.coroutines.CoroutineScope
@@ -50,34 +51,45 @@ class DownloadInterceptor(
         )
         onNewDownload(
             listOf(
-                webRequest.toDownloadCredentialsInUiProps()
+                webRequest.toHttpDownloadCredentialsInUiProps()
             )
         )
     }
 
     /**
-     * Opens the normal AB Download Manager add-download flow for requests that
-     * were observed inside the embedded browser. Request headers, Referer and
-     * browser cookies are preserved so media URLs that depend on the current
-     * session can still be fetched by the downloader.
+     * Opens the normal AB Download Manager add-download flow for media observed
+     * inside the embedded browser. Direct files use the HTTP downloader while
+     * HLS manifests use AB Download Manager's native HLS downloader.
+     *
+     * Request headers, Referer and browser cookies are preserved so media URLs
+     * tied to the current browser session can still be fetched.
      */
-    fun onDownloadRequests(
-        webRequests: List<ABDMWebRequest>,
+    fun onDownloadMediaCandidates(
+        candidates: List<MediaCandidate>,
         userAgent: String?,
         tab: ABDMBrowserTab,
     ) {
-        val downloads = webRequests
+        val downloads = candidates
             .asSequence()
-            .filter { HttpUrlUtils.isValidUrl(it.url) }
-            .distinctBy { it.url }
-            .map { request ->
-                request
+            .filter { HttpUrlUtils.isValidUrl(it.request.url) }
+            .distinctBy { it.request.url }
+            .mapNotNull { candidate ->
+                val request = candidate.request
                     .copy(
-                        page = request.page ?: getPageUrl(tab.tabState),
+                        page = candidate.request.page ?: getPageUrl(tab.tabState),
                     )
                     .withUserAgent(userAgent)
                     .withCookieManagerCookies()
-                    .toDownloadCredentialsInUiProps()
+
+                when (candidate.kind) {
+                    MediaKind.HLS_MANIFEST -> request.toHlsDownloadCredentialsInUiProps()
+                    MediaKind.VIDEO_FILE,
+                    MediaKind.AUDIO_FILE -> request.toHttpDownloadCredentialsInUiProps()
+
+                    MediaKind.VIDEO_TRACK,
+                    MediaKind.AUDIO_TRACK,
+                    MediaKind.DASH_MANIFEST -> null
+                }
             }
             .toList()
 
@@ -119,15 +131,35 @@ class DownloadInterceptor(
             .withCookieManagerCookies()
     }
 
-    private fun ABDMWebRequest.toDownloadCredentialsInUiProps(): AddDownloadCredentialsInUiProps {
+    private fun ABDMWebRequest.toHttpDownloadCredentialsInUiProps(): AddDownloadCredentialsInUiProps {
         return AddDownloadCredentialsInUiProps(
             HttpDownloadCredentials(
                 link = url,
                 headers = headers,
                 downloadPage = page,
+                userAgent = headerValue(USER_AGENT_HEADER),
             ),
             AddDownloadCredentialsInUiProps.Configs()
         )
+    }
+
+    private fun ABDMWebRequest.toHlsDownloadCredentialsInUiProps(): AddDownloadCredentialsInUiProps {
+        return AddDownloadCredentialsInUiProps(
+            HLSDownloadCredentials(
+                link = url,
+                headers = headers,
+                downloadPage = page,
+                userAgent = headerValue(USER_AGENT_HEADER),
+            ),
+            AddDownloadCredentialsInUiProps.Configs()
+        )
+    }
+
+    private fun ABDMWebRequest.headerValue(name: String): String? {
+        val key = headers.keys.firstOrNull {
+            it.equals(name, ignoreCase = true)
+        }
+        return key?.let(headers::get)
     }
 
     private fun ABDMWebRequest.withUserAgent(userAgent: String?): ABDMWebRequest {
