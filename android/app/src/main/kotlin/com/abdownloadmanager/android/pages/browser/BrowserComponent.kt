@@ -366,6 +366,19 @@ class BrowserComponent(
         }
     }
 
+    fun downloadDetectedMedia(
+        tab: ABDMBrowserTab,
+    ) {
+        val candidates = mediaCatcher.getDownloadableCandidates(tab.tabId)
+        if (candidates.isEmpty()) return
+
+        downloadInterceptor.onDownloadRequests(
+            webRequests = candidates.map { it.request },
+            userAgent = null,
+            tab = tab,
+        )
+    }
+
     fun createDownloadDetectedMediaAction(
         tab: ABDMBrowserTab,
         candidates: List<MediaCandidate>,
@@ -374,11 +387,7 @@ class BrowserComponent(
             title = "Detected media (${candidates.size})".asStringSource(),
             icon = MyIcons.videoFile,
         ) {
-            downloadInterceptor.onDownloadRequests(
-                webRequests = candidates.map { it.request },
-                userAgent = null,
-                tab = tab,
-            )
+            downloadDetectedMedia(tab)
             closeMainMenu()
         }
     }
