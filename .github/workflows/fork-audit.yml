@@ -1,0 +1,40 @@
+name: Fork network audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_pushed:
+        description: "Optional cutoff date (YYYY-MM-DD)"
+        required: false
+        default: ""
+      max_forks:
+        description: "Maximum forks to scan; 0 = all"
+        required: false
+        default: "0"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Run fork audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/fork_audit.py \
+            --min-pushed "${{ inputs.min_pushed }}" \
+            --max-forks "${{ inputs.max_forks }}" \
+            --output-dir fork-audit
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: abdm-fork-audit
+          path: fork-audit/
+          if-no-files-found: error
