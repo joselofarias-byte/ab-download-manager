@@ -311,6 +311,16 @@ fun AddressBar(
     val canGoForward = navigator?.canGoForward ?: false
     val currentURL = webViewState?.lastLoadedUrl
     val currentTitle = webViewState?.pageTitle
+    val mediaByTab by browserComponent.mediaCatcher.candidates.collectAsState()
+    val detectedMediaCount = currentWebViewHolder
+        ?.tab
+        ?.tabId
+        ?.let { tabId ->
+            mediaByTab[tabId]
+                .orEmpty()
+                .count { it.kind.isDirectlyDownloadable }
+        }
+        ?: 0
     var isTabListVisible by remember { mutableStateOf(false) }
 
     Column(
@@ -367,6 +377,16 @@ fun AddressBar(
                 }
             }
             Spacer(Modifier.weight(1f))
+            if (detectedMediaCount > 0) {
+                TransparentIconActionButton(
+                    icon = MyIcons.videoFile,
+                    contentDescription = "Detected media ($detectedMediaCount)".asStringSource(),
+                ) {
+                    currentWebViewHolder?.tab?.let {
+                        browserComponent.downloadDetectedMedia(it)
+                    }
+                }
+            }
             val shape = myShapes.defaultRounded
             Box(
                 Modifier

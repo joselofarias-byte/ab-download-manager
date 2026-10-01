@@ -1,6 +1,7 @@
 package com.abdownloadmanager.android.pages.browser
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.content.Intent
 import android.net.Uri
 import android.os.Message
@@ -41,7 +42,11 @@ class WebViewRegistry(
                 tab = tab,
                 navigator = WebViewNavigator(scope),
                 webView = null,
-                client = ABDMWebViewClient(browserComponent.downloadInterceptor, scope),
+                client = ABDMWebViewClient(
+                    requestInterceptor = browserComponent.downloadInterceptor,
+                    mediaCatcher = browserComponent.mediaCatcher,
+                    scope = scope,
+                ),
                 chromeClient = ABDMChromeClient(browserComponent, ::getWebViewHolder),
                 webViewFactory = this,
             )
@@ -149,21 +154,53 @@ interface WebViewFactory {
 
 class ABDMWebViewClient(
     private val requestInterceptor: DownloadInterceptor,
+    private val mediaCatcher: MediaCatcher,
     private val scope: CoroutineScope,
 ) : AccompanistWebViewClient() {
     override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
         if (request != null) {
             scope.launch(Dispatchers.Main) {
-                requestInterceptor.interceptRequest(
-                    ABDMWebRequest(
-                        url = request.url.toString(),
-                        headers = request.requestHeaders,
-                        page = view?.originalUrl ?: view?.url
-                    )
+                val pageUrl = view?.url ?: view?.originalUrl
+                val headers = request.requestHeaders.toMutableMap()
+                if (headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+                    view?.settings?.userAgentString
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { headers["User-Agent"] = it }
+                }
+                if (
+                    pageUrl != null &&
+                    headers.keys.none { it.equals("Referer", ignoreCase = true) }
+                ) {
+                    headers["Referer"] = pageUrl
+                }
+                val webRequest = ABDMWebRequest(
+                    url = request.url.toString(),
+                    headers = headers,
+                    page = pageUrl,
                 )
+                requestInterceptor.interceptRequest(webRequest)
+                (view as? ABDMWebView)?.tabId?.let { tabId ->
+                    mediaCatcher.interceptRequest(
+                        tabId = tabId,
+                        request = webRequest,
+                    )
+                }
             }
         }
         return super.shouldInterceptRequest(view, request)
+    }
+
+    override fun onPageStarted(
+        view: WebView,
+        url: String?,
+        favicon: Bitmap?,
+    ) {
+        super.onPageStarted(view, url, favicon)
+        if (url != null) {
+            (view as? ABDMWebView)?.tabId?.let { tabId ->
+                mediaCatcher.onPageNavigation(tabId, url)
+            }
+        }
     }
 
     override fun shouldOverrideUrlLoading(
@@ -173,7 +210,7 @@ class ABDMWebViewClient(
 
         val url = request.url.toString()
 
-        // Let WebView load normal web pages
+        // Let WebView load normal web pages.
         if (url.startsWith("http://") || url.startsWith("https://")) {
             return false
         }

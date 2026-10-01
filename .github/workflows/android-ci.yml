@@ -1,0 +1,55 @@
+name: Android CI
+
+on:
+  pull_request:
+    paths:
+      - "android/**"
+      - "shared/**"
+      - "downloader/**"
+      - "gradle/**"
+      - "buildSrc/**"
+      - "*.gradle.kts"
+      - "settings.gradle.kts"
+      - ".github/workflows/android-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assemble-debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JBR
+        uses: actions/setup-java@v5
+        with:
+          distribution: jetbrains
+          java-package: jdk
+          java-version: "25"
+          check-latest: true
+
+      - name: Show Android SDK state
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          test -d "$ANDROID_HOME/platforms" && ls -la "$ANDROID_HOME/platforms" || true
+          test -d "$ANDROID_HOME/build-tools" && ls -la "$ANDROID_HOME/build-tools" || true
+
+      - name: Assemble Android debug APK
+        run: ./gradlew :android:app:assembleDebug --stacktrace
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: abdm-media-catcher-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
