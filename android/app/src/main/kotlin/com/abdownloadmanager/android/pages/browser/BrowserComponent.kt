@@ -401,10 +401,14 @@ class BrowserComponent(
                 Toast.makeText(
                     context,
                     when (mode) {
-                        MediaPageDownloadMode.AUDIO_ONLY -> "Preparando audio..."
-                        MediaPageDownloadMode.ALL_CAPTIONS -> "Preparando subtítulos..."
-                        MediaPageDownloadMode.BEST_VIDEO_SPANISH_CAPTIONS -> "Preparando video + subtítulos en español..."
-                        MediaPageDownloadMode.BEST_VIDEO -> "Preparando video..."
+                        MediaPageDownloadMode.AUDIO_ONLY ->
+                            Res.string.media_preparing_audio.asStringSource().getString()
+                        MediaPageDownloadMode.ALL_CAPTIONS ->
+                            Res.string.media_preparing_captions.asStringSource().getString()
+                        MediaPageDownloadMode.BEST_VIDEO_SPANISH_CAPTIONS ->
+                            Res.string.media_preparing_video_spanish_captions.asStringSource().getString()
+                        MediaPageDownloadMode.BEST_VIDEO ->
+                            Res.string.media_preparing_video.asStringSource().getString()
                     },
                     Toast.LENGTH_SHORT,
                 ).show()
@@ -423,8 +427,16 @@ class BrowserComponent(
                 Toast.makeText(
                     context,
                     result.fold(
-                        onSuccess = { "Guardado en Download/ABDownloadManager/Media" },
-                        onFailure = { "Falló la descarga multimedia: ${it.message ?: "error desconocido"}" },
+                        onSuccess = {
+                            Res.string.media_download_saved.asStringSource().getString()
+                        },
+                        onFailure = {
+                            val error = it.message
+                                ?: Res.string.media_unknown_error.asStringSource().getString()
+                            Res.string.media_download_failed
+                                .asStringSource()
+                                .getString(mapOf("error" to error))
+                        },
                     ),
                     Toast.LENGTH_LONG,
                 ).show()
@@ -434,7 +446,7 @@ class BrowserComponent(
 
     fun createDownloadPageVideoAction(url: String): AnAction {
         return simpleAction(
-            title = "Descargar video (mejor calidad)".asStringSource(),
+            title = Res.string.media_download_page_video_best.asStringSource(),
             icon = MyIcons.videoFile,
         ) {
             startPageMediaDownload(url, MediaPageDownloadMode.BEST_VIDEO)
@@ -443,7 +455,7 @@ class BrowserComponent(
 
     fun createDownloadPageVideoSpanishCaptionsAction(url: String): AnAction {
         return simpleAction(
-            title = "Descargar video + subtítulos en español".asStringSource(),
+            title = Res.string.media_download_video_spanish_captions.asStringSource(),
             icon = MyIcons.videoFile,
         ) {
             startPageMediaDownload(
@@ -455,7 +467,7 @@ class BrowserComponent(
 
     fun createDownloadPageAudioAction(url: String): AnAction {
         return simpleAction(
-            title = "Descargar audio (MP3)".asStringSource(),
+            title = Res.string.media_download_page_audio_mp3.asStringSource(),
             icon = MyIcons.musicFile,
         ) {
             startPageMediaDownload(url, MediaPageDownloadMode.AUDIO_ONLY)
@@ -464,7 +476,7 @@ class BrowserComponent(
 
     fun createDownloadPageAllCaptionsAction(url: String): AnAction {
         return simpleAction(
-            title = "Descargar todos los subtítulos (SRT)".asStringSource(),
+            title = Res.string.media_download_all_captions_srt.asStringSource(),
             icon = MyIcons.documentFile,
         ) {
             startPageMediaDownload(
@@ -479,7 +491,10 @@ class BrowserComponent(
         candidates: List<MediaCandidate>,
     ): AnAction {
         return simpleAction(
-            title = "Detected media (${candidates.size})".asStringSource(),
+            title = Res.string.media_detected_count
+                .asStringSource()
+                .getString(mapOf("count" to candidates.size.toString()))
+                .asStringSource(),
             icon = MyIcons.videoFile,
         ) {
             downloadDetectedMedia(tab)
