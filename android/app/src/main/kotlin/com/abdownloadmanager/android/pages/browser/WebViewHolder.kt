@@ -41,7 +41,11 @@ class WebViewRegistry(
                 tab = tab,
                 navigator = WebViewNavigator(scope),
                 webView = null,
-                client = ABDMWebViewClient(browserComponent.downloadInterceptor, scope),
+                client = ABDMWebViewClient(
+                    requestInterceptor = browserComponent.downloadInterceptor,
+                    mediaCatcher = browserComponent.mediaCatcher,
+                    scope = scope,
+                ),
                 chromeClient = ABDMChromeClient(browserComponent, ::getWebViewHolder),
                 webViewFactory = this,
             )
@@ -149,18 +153,24 @@ interface WebViewFactory {
 
 class ABDMWebViewClient(
     private val requestInterceptor: DownloadInterceptor,
+    private val mediaCatcher: MediaCatcher,
     private val scope: CoroutineScope,
 ) : AccompanistWebViewClient() {
     override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
         if (request != null) {
             scope.launch(Dispatchers.Main) {
-                requestInterceptor.interceptRequest(
-                    ABDMWebRequest(
-                        url = request.url.toString(),
-                        headers = request.requestHeaders,
-                        page = view?.originalUrl ?: view?.url
-                    )
+                val webRequest = ABDMWebRequest(
+                    url = request.url.toString(),
+                    headers = request.requestHeaders,
+                    page = view?.originalUrl ?: view?.url
                 )
+                requestInterceptor.interceptRequest(webRequest)
+                (view as? ABDMWebView)?.tabId?.let { tabId ->
+                    mediaCatcher.interceptRequest(
+                        tabId = tabId,
+                        request = webRequest,
+                    )
+                }
             }
         }
         return super.shouldInterceptRequest(view, request)
@@ -173,8 +183,13 @@ class ABDMWebViewClient(
 
         val url = request.url.toString()
 
-        // Let WebView load normal web pages
+        // Let WebView load normal web pages.
         if (url.startsWith("http://") || url.startsWith("https://")) {
+            if (request.isForMainFrame) {
+                (view as? ABDMWebView)?.tabId?.let { tabId ->
+                    mediaCatcher.onPageNavigation(tabId, url)
+                }
+            }
             return false
         }
 
