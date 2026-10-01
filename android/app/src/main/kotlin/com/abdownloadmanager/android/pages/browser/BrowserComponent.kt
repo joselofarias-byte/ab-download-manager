@@ -372,8 +372,8 @@ class BrowserComponent(
         val candidates = mediaCatcher.getDownloadableCandidates(tab.tabId)
         if (candidates.isEmpty()) return
 
-        downloadInterceptor.onDownloadRequests(
-            webRequests = candidates.map { it.request },
+        downloadInterceptor.onDownloadMediaCandidates(
+            candidates = candidates,
             userAgent = null,
             tab = tab,
         )
