@@ -25,20 +25,19 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Set up JBR
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: jetbrains
           java-package: jdk
           java-version: "25"
           check-latest: true
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
-
-      - name: Install Android API 37
-        run: sdkmanager "platforms;android-37"
+      - name: Show Android SDK state
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          test -d "$ANDROID_HOME/platforms" && ls -la "$ANDROID_HOME/platforms" || true
+          test -d "$ANDROID_HOME/build-tools" && ls -la "$ANDROID_HOME/build-tools" || true
 
       - name: Assemble Android debug APK
         run: ./gradlew :android:app:assembleDebug --stacktrace
