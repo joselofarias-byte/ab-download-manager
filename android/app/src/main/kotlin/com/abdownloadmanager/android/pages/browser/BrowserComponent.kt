@@ -93,7 +93,9 @@ class BrowserComponent(
                     if (url.startsWith("http://") || url.startsWith("https://")) {
                         separator()
                         +createDownloadPageVideoAction(url)
+                        +createDownloadPageVideoSpanishCaptionsAction(url)
                         +createDownloadPageAudioAction(url)
+                        +createDownloadPageAllCaptionsAction(url)
                     }
                     if (isBookmarked(url)) {
                         +createRemoveFromBookmarkAction(url)
@@ -391,22 +393,30 @@ class BrowserComponent(
 
     private fun startPageMediaDownload(
         url: String,
-        audioOnly: Boolean,
+        mode: MediaPageDownloadMode,
     ) {
         closeMainMenu()
         scope.launch {
             withContext(Dispatchers.Main) {
                 Toast.makeText(
                     context,
-                    if (audioOnly) "Resolving audio..." else "Resolving video...",
+                    when (mode) {
+                        MediaPageDownloadMode.AUDIO_ONLY -> "Resolving audio..."
+                        MediaPageDownloadMode.ALL_CAPTIONS -> "Resolving captions..."
+                        MediaPageDownloadMode.BEST_VIDEO_SPANISH_CAPTIONS -> "Resolving video + Spanish captions..."
+                        MediaPageDownloadMode.BEST_VIDEO -> "Resolving video..."
+                    },
                     Toast.LENGTH_SHORT,
                 ).show()
             }
 
-            val result = if (audioOnly) {
-                mediaPageDownloader.downloadAudioOnly(url)
-            } else {
-                mediaPageDownloader.downloadBestVideo(url)
+            val result = when (mode) {
+                MediaPageDownloadMode.BEST_VIDEO -> mediaPageDownloader.downloadBestVideo(url)
+                MediaPageDownloadMode.AUDIO_ONLY -> mediaPageDownloader.downloadAudioOnly(url)
+                MediaPageDownloadMode.BEST_VIDEO_SPANISH_CAPTIONS ->
+                    mediaPageDownloader.downloadBestVideoWithSpanishCaptions(url)
+                MediaPageDownloadMode.ALL_CAPTIONS ->
+                    mediaPageDownloader.downloadAllCaptions(url)
             }
 
             withContext(Dispatchers.Main) {
@@ -427,7 +437,19 @@ class BrowserComponent(
             title = "Download page video (best)".asStringSource(),
             icon = MyIcons.videoFile,
         ) {
-            startPageMediaDownload(url, audioOnly = false)
+            startPageMediaDownload(url, MediaPageDownloadMode.BEST_VIDEO)
+        }
+    }
+
+    fun createDownloadPageVideoSpanishCaptionsAction(url: String): AnAction {
+        return simpleAction(
+            title = "Download video + Spanish captions".asStringSource(),
+            icon = MyIcons.videoFile,
+        ) {
+            startPageMediaDownload(
+                url,
+                MediaPageDownloadMode.BEST_VIDEO_SPANISH_CAPTIONS,
+            )
         }
     }
 
@@ -436,7 +458,19 @@ class BrowserComponent(
             title = "Download page audio (MP3)".asStringSource(),
             icon = MyIcons.musicFile,
         ) {
-            startPageMediaDownload(url, audioOnly = true)
+            startPageMediaDownload(url, MediaPageDownloadMode.AUDIO_ONLY)
+        }
+    }
+
+    fun createDownloadPageAllCaptionsAction(url: String): AnAction {
+        return simpleAction(
+            title = "Download all captions (SRT)".asStringSource(),
+            icon = MyIcons.documentFile,
+        ) {
+            startPageMediaDownload(
+                url,
+                MediaPageDownloadMode.ALL_CAPTIONS,
+            )
         }
     }
 
