@@ -64,6 +64,7 @@ import com.arkivanov.decompose.router.slot.dismiss
 import ir.amirab.SelectionUtil
 import ir.amirab.downloader.db.QueueModel
 import ir.amirab.downloader.downloaditem.DownloadJobStatus
+import ir.amirab.downloader.downloaditem.http.HttpDownloadCredentials
 import ir.amirab.downloader.monitor.CompletedDownloadItemState
 import ir.amirab.downloader.monitor.IDownloadItemState
 import ir.amirab.downloader.monitor.ProcessingDownloadItemState
@@ -380,6 +381,24 @@ class HomeComponent(
         +createDownloadFromClipboardAction(addDownloadDialogManager = addDownloadDialogManager)
         +createNewDownloadAction(enterNewURLDialogManager = enterNewURLDialogManager)
         +createOpenBatchDownloadAction(batchDownloadPageManager = batchDownloadPageManager)
+        if (com.abdownloadmanager.android.BuildConfig.DEBUG) {
+            separator()
+            item(
+                title = Res.string.shortxlinks_test_pair.asStringSource(),
+                icon = MyIcons.earth,
+            ) {
+                addDownloadDialogManager.openAddDownloadDialog(
+                    listOf(
+                        "https://shortxlinks.in/gl2xqf",
+                        "https://shortxlinks.in/TfmfX",
+                    ).map { link ->
+                        AddDownloadCredentialsInUiProps(
+                            HttpDownloadCredentials(link = link)
+                        )
+                    }
+                )
+            }
+        }
     }
 
     val isOverlayVisible = currentActivePopup.mapStateFlow {
