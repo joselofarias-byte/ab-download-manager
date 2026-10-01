@@ -53,6 +53,7 @@ dependencies {
     implementation(libs.decompose.jbCompose)
     implementation(libs.aboutLibraries.core)
     implementation(libs.youtubedlAndroid.library)
+    implementation(libs.youtubedlAndroid.ffmpeg)
     implementation(project(":shared:app"))
     ksp(libs.arrow.opticKsp)
 }
