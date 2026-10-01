@@ -22,6 +22,7 @@
             android:roundIcon="@mipmap/ic_launcher_round"
             android:usesCleartextTraffic="true"
             android:requestLegacyExternalStorage="true"
+            android:extractNativeLibs="true"
             android:label="@string/app_short_name"
     >
         <activity
