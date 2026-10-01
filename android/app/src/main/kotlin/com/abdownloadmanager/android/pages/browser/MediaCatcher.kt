@@ -100,7 +100,7 @@ enum class MediaKind(
     AUDIO_FILE(true, false, 1),
     VIDEO_TRACK(false, false, 2),
     AUDIO_TRACK(false, false, 3),
-    HLS_MANIFEST(false, true, 4),
+    HLS_MANIFEST(true, true, 4),
     DASH_MANIFEST(false, true, 5);
 
     companion object {
