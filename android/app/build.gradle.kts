@@ -47,6 +47,15 @@ android {
         buildConfig = true
         resValues = true
     }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += setOf(
+                "**/libpython.zip.so",
+                "**/libffmpeg.zip.so",
+            )
+        }
+    }
 }
 
 dependencies {
