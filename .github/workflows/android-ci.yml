@@ -1,0 +1,50 @@
+name: Android CI
+
+on:
+  pull_request:
+    paths:
+      - "android/**"
+      - "shared/**"
+      - "downloader/**"
+      - "gradle/**"
+      - "buildSrc/**"
+      - "*.gradle.kts"
+      - "settings.gradle.kts"
+      - ".github/workflows/android-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  assemble-debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JBR
+        uses: actions/setup-java@v4
+        with:
+          distribution: jetbrains
+          java-package: jdk
+          java-version: "25"
+          check-latest: true
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 37
+        run: sdkmanager "platforms;android-37"
+
+      - name: Assemble Android debug APK
+        run: ./gradlew :android:app:assembleDebug --stacktrace
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: abdm-media-catcher-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
