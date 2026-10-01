@@ -13,6 +13,8 @@ import ir.amirab.plugin.common_android.task.androidEnableFileTypesGeneratorForMa
 import org.gradle.kotlin.dsl.support.uppercaseFirstChar
 import java.util.Properties
 
+val testDebugKeystoreFile = System.getenv("ABDM_TEST_DEBUG_KEYSTORE_FILE")
+
 plugins {
     id(Plugins.Android.application)
     id(MyPlugins.androidBase)
@@ -36,10 +38,23 @@ android {
     }
     compileSdk = compileSdkVersion
     namespace = "com.abdownloadmanager.android"
+    signingConfigs {
+        if (!testDebugKeystoreFile.isNullOrBlank()) {
+            create("stableTestDebug") {
+                storeFile = file(testDebugKeystoreFile)
+                storePassword = System.getenv("ABDM_TEST_DEBUG_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ABDM_TEST_DEBUG_KEY_ALIAS")
+                keyPassword = System.getenv("ABDM_TEST_DEBUG_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
             resValue("string", "app_short_name", "AB DM - Debug")
+            signingConfigs.findByName("stableTestDebug")?.let {
+                signingConfig = it
+            }
         }
     }
     buildFeatures {
