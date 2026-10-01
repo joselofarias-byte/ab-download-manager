@@ -95,8 +95,21 @@ class LanguageManager(
      * the returned language is guaranteed to be available. (at least [DefaultLanguageInfo])
      */
     private fun bestLanguageInfo(locale: String): LanguageInfo {
+        languageList.value.find {
+            it.toLocaleString().equals(locale, ignoreCase = true)
+        }?.let {
+            return it
+        }
+
+        val requestedLanguage = locale
+            .substringBefore("_")
+            .substringBefore("-")
+
         return languageList.value.find {
-            it.toLocaleString() == locale
+            it.locale.languageCode.equals(
+                requestedLanguage,
+                ignoreCase = true,
+            )
         } ?: DefaultLanguageInfo
     }
 

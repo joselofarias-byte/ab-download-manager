@@ -380,7 +380,10 @@ fun AddressBar(
             if (detectedMediaCount > 0) {
                 TransparentIconActionButton(
                     icon = MyIcons.videoFile,
-                    contentDescription = "Detected media ($detectedMediaCount)".asStringSource(),
+                    contentDescription = Res.string.media_detected_count
+                        .asStringSource()
+                        .getString(mapOf("count" to detectedMediaCount.toString()))
+                        .asStringSource(),
                 ) {
                     currentWebViewHolder?.tab?.let {
                         browserComponent.downloadDetectedMedia(it)

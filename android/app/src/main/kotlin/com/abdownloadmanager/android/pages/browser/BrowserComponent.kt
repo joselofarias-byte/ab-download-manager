@@ -2,6 +2,7 @@ package com.abdownloadmanager.android.pages.browser
 
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import androidx.compose.runtime.Stable
 import com.abdownloadmanager.android.pages.add.multiple.AddMultiDownloadActivity
 import com.abdownloadmanager.android.pages.add.single.AddSingleDownloadActivity
@@ -25,9 +26,12 @@ import ir.amirab.util.compose.action.buildMenu
 import ir.amirab.util.compose.action.simpleAction
 import ir.amirab.util.compose.asStringSource
 import ir.amirab.util.ifThen
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.util.UUID
 import kotlin.text.orEmpty
@@ -41,6 +45,7 @@ class BrowserComponent(
     componentContext,
 ), ContainsEffects<BrowserComponent.Effects> by supportEffects() {
     val mediaCatcher = MediaCatcher()
+    private val mediaPageDownloader = MediaPageDownloader(context)
 
     val downloadInterceptor = DownloadInterceptor(
         scope, {
@@ -85,6 +90,13 @@ class BrowserComponent(
                 separator()
                 +createShowBookmarksAction()
                 if (url != null) {
+                    if (url.startsWith("http://") || url.startsWith("https://")) {
+                        separator()
+                        +createDownloadPageVideoAction(url)
+                        +createDownloadPageVideoSpanishCaptionsAction(url)
+                        +createDownloadPageAudioAction(url)
+                        +createDownloadPageAllCaptionsAction(url)
+                    }
                     if (isBookmarked(url)) {
                         +createRemoveFromBookmarkAction(url)
                     } else {
@@ -379,12 +391,110 @@ class BrowserComponent(
         )
     }
 
+    private fun startPageMediaDownload(
+        url: String,
+        mode: MediaPageDownloadMode,
+    ) {
+        closeMainMenu()
+        scope.launch {
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    context,
+                    when (mode) {
+                        MediaPageDownloadMode.AUDIO_ONLY ->
+                            Res.string.media_preparing_audio.asStringSource().getString()
+                        MediaPageDownloadMode.ALL_CAPTIONS ->
+                            Res.string.media_preparing_captions.asStringSource().getString()
+                        MediaPageDownloadMode.BEST_VIDEO_SPANISH_CAPTIONS ->
+                            Res.string.media_preparing_video_spanish_captions.asStringSource().getString()
+                        MediaPageDownloadMode.BEST_VIDEO ->
+                            Res.string.media_preparing_video.asStringSource().getString()
+                    },
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+
+            val result = when (mode) {
+                MediaPageDownloadMode.BEST_VIDEO -> mediaPageDownloader.downloadBestVideo(url)
+                MediaPageDownloadMode.AUDIO_ONLY -> mediaPageDownloader.downloadAudioOnly(url)
+                MediaPageDownloadMode.BEST_VIDEO_SPANISH_CAPTIONS ->
+                    mediaPageDownloader.downloadBestVideoWithSpanishCaptions(url)
+                MediaPageDownloadMode.ALL_CAPTIONS ->
+                    mediaPageDownloader.downloadAllCaptions(url)
+            }
+
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    context,
+                    result.fold(
+                        onSuccess = {
+                            Res.string.media_download_saved.asStringSource().getString()
+                        },
+                        onFailure = {
+                            val error = it.message
+                                ?: Res.string.media_unknown_error.asStringSource().getString()
+                            Res.string.media_download_failed
+                                .asStringSource()
+                                .getString(mapOf("error" to error))
+                        },
+                    ),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+
+    fun createDownloadPageVideoAction(url: String): AnAction {
+        return simpleAction(
+            title = Res.string.media_download_page_video_best.asStringSource(),
+            icon = MyIcons.videoFile,
+        ) {
+            startPageMediaDownload(url, MediaPageDownloadMode.BEST_VIDEO)
+        }
+    }
+
+    fun createDownloadPageVideoSpanishCaptionsAction(url: String): AnAction {
+        return simpleAction(
+            title = Res.string.media_download_video_spanish_captions.asStringSource(),
+            icon = MyIcons.videoFile,
+        ) {
+            startPageMediaDownload(
+                url,
+                MediaPageDownloadMode.BEST_VIDEO_SPANISH_CAPTIONS,
+            )
+        }
+    }
+
+    fun createDownloadPageAudioAction(url: String): AnAction {
+        return simpleAction(
+            title = Res.string.media_download_page_audio_mp3.asStringSource(),
+            icon = MyIcons.musicFile,
+        ) {
+            startPageMediaDownload(url, MediaPageDownloadMode.AUDIO_ONLY)
+        }
+    }
+
+    fun createDownloadPageAllCaptionsAction(url: String): AnAction {
+        return simpleAction(
+            title = Res.string.media_download_all_captions_srt.asStringSource(),
+            icon = MyIcons.documentFile,
+        ) {
+            startPageMediaDownload(
+                url,
+                MediaPageDownloadMode.ALL_CAPTIONS,
+            )
+        }
+    }
+
     fun createDownloadDetectedMediaAction(
         tab: ABDMBrowserTab,
         candidates: List<MediaCandidate>,
     ): AnAction {
         return simpleAction(
-            title = "Detected media (${candidates.size})".asStringSource(),
+            title = Res.string.media_detected_count
+                .asStringSource()
+                .getString(mapOf("count" to candidates.size.toString()))
+                .asStringSource(),
             icon = MyIcons.videoFile,
         ) {
             downloadDetectedMedia(tab)

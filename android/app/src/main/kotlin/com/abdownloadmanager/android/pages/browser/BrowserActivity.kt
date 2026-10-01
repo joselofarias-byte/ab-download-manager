@@ -47,15 +47,33 @@ class BrowserActivity : ABDMActivity() {
     }
 
     override fun handleIntent(intent: Intent) {
-        if (intent.action == Intent.ACTION_VIEW) {
-            val url = intent.data?.toString()
-            if (url != null && HttpUrlUtils.isValidUrl(url)) {
-                component.newTab(url)
+        if (intent.action != Intent.ACTION_VIEW) return
+
+        val extraUrls = intent
+            .getStringArrayListExtra(URLS_KEY)
+            .orEmpty()
+            .filter { HttpUrlUtils.isValidUrl(it) }
+            .distinct()
+
+        if (extraUrls.isNotEmpty()) {
+            extraUrls.forEachIndexed { index, url ->
+                component.newTab(
+                    url = url,
+                    switch = index == extraUrls.lastIndex,
+                )
             }
+            return
+        }
+
+        val url = intent.data?.toString()
+        if (url != null && HttpUrlUtils.isValidUrl(url)) {
+            component.newTab(url)
         }
     }
 
     companion object {
+        private const val URLS_KEY = "browser_urls"
+
         fun createIntent(
             context: Context,
             url: String? = null,
@@ -63,6 +81,19 @@ class BrowserActivity : ABDMActivity() {
             return Intent(context, BrowserActivity::class.java).apply {
                 action = Intent.ACTION_VIEW
                 data = url?.toUri()
+            }
+        }
+
+        fun createIntent(
+            context: Context,
+            urls: List<String>,
+        ): Intent {
+            return Intent(context, BrowserActivity::class.java).apply {
+                action = Intent.ACTION_VIEW
+                putStringArrayListExtra(
+                    URLS_KEY,
+                    ArrayList(urls.filter { HttpUrlUtils.isValidUrl(it) }.distinct()),
+                )
             }
         }
 

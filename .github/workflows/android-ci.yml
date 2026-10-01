@@ -43,6 +43,15 @@ jobs:
           test -d "$ANDROID_HOME/platforms" && ls -la "$ANDROID_HOME/platforms" || true
           test -d "$ANDROID_HOME/build-tools" && ls -la "$ANDROID_HOME/build-tools" || true
 
+      - name: Prepare stable test signing key
+        run: |
+          mkdir -p "$RUNNER_TEMP/abdm-test-signing"
+          base64 -d android/ci/abdm-test-debug.jks.b64 > "$RUNNER_TEMP/abdm-test-signing/abdm-test-debug.jks"
+          echo "ABDM_TEST_DEBUG_KEYSTORE_FILE=$RUNNER_TEMP/abdm-test-signing/abdm-test-debug.jks" >> "$GITHUB_ENV"
+          echo "ABDM_TEST_DEBUG_KEYSTORE_PASSWORD=abdmtest2026" >> "$GITHUB_ENV"
+          echo "ABDM_TEST_DEBUG_KEY_ALIAS=abdm-test-debug" >> "$GITHUB_ENV"
+          echo "ABDM_TEST_DEBUG_KEY_PASSWORD=abdmtest2026" >> "$GITHUB_ENV"
+
       - name: Assemble Android debug APK
         run: ./gradlew :android:app:assembleDebug --stacktrace
 

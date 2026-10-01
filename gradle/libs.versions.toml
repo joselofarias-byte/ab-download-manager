@@ -45,6 +45,7 @@ ktor = "3.6.0"
 clikit = "5.1.0"
 androidCompileSdk = "37"
 schemakt = "0.2.3"
+youtubedlAndroid = "0.18.1"
 
 [libraries]
 
@@ -146,6 +147,9 @@ nucleus-darkmodeDetector = { module = "dev.nucleusframework:nucleus.darkmode-det
 
 proxyVole = { module = "org.bidib.com.github.markusbernhardt:proxy-vole", version.ref = "proxyVole" }
 jbrApi = { module = "org.jetbrains.runtime:jbr-api", version.ref = "jbrApi" }
+
+youtubedlAndroid-library = { module = "io.github.junkfood02.youtubedl-android:library", version.ref = "youtubedlAndroid" }
+youtubedlAndroid-ffmpeg = { module = "io.github.junkfood02.youtubedl-android:ffmpeg", version.ref = "youtubedlAndroid" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

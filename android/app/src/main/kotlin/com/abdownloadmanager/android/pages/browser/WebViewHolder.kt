@@ -9,12 +9,15 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.widget.Toast
 import com.abdownloadmanager.android.ui.widget.AccompanistWebChromeClient
 import com.abdownloadmanager.android.ui.widget.AccompanistWebViewClient
 import com.abdownloadmanager.android.ui.widget.WebContent
 import com.abdownloadmanager.android.ui.widget.WebViewNavigator
+import com.abdownloadmanager.resources.Res
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import ir.amirab.util.compose.asStringSource
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -94,8 +97,85 @@ class WebViewRegistry(
                     false
                 }
             }
-            webView.setDownloadListener { url, userAgent, _, _, _ ->
+            webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
                 scope.launch(Dispatchers.Main) {
+                    if (url == null) {
+                        return@launch
+                    }
+
+                    val isHtmlInterstitial =
+                        mimeType?.startsWith("text/html", ignoreCase = true) == true ||
+                            mimeType?.startsWith("application/xhtml+xml", ignoreCase = true) == true ||
+                            contentDisposition?.contains(".html", ignoreCase = true) == true ||
+                            contentDisposition?.contains(".htm", ignoreCase = true) == true ||
+                            Uri.parse(url).lastPathSegment?.endsWith(".html", ignoreCase = true) == true ||
+                            Uri.parse(url).lastPathSegment?.endsWith(".htm", ignoreCase = true) == true
+
+                    if (isHtmlInterstitial && isHttpWebUrl(url)) {
+                        Toast.makeText(
+                            webView.context,
+                            Res.string.link_intermediate_resolving.asStringSource().getString(),
+                            Toast.LENGTH_SHORT,
+                        ).show()
+
+                        val referer = webView.url ?: webView.originalUrl ?: webView.openedBy
+                        val result = IntermediateLinkResolver().resolve(
+                            url = url,
+                            userAgent = userAgent ?: webView.settings.userAgentString,
+                            referer = referer,
+                        )
+
+                        result.fold(
+                            onSuccess = { resolved ->
+                                when (resolved) {
+                                    is IntermediateLinkResolution.HtmlPage -> {
+                                        webView.loadDataWithBaseURL(
+                                            resolved.url,
+                                            resolved.html,
+                                            "text/html",
+                                            "UTF-8",
+                                            resolved.url,
+                                        )
+                                    }
+
+                                    is IntermediateLinkResolution.Navigate -> {
+                                        extractHttpWebFallback(resolved.url)?.let { webTarget ->
+                                            webView.loadUrl(webTarget)
+                                        } ?: webView.loadUrl(resolved.url)
+                                    }
+
+                                    is IntermediateLinkResolution.DirectDownload -> {
+                                        browserComponent.downloadInterceptor.onDownloadStart(
+                                            resolved.url,
+                                            userAgent ?: webView.settings.userAgentString,
+                                            referer,
+                                            tab,
+                                        )
+                                    }
+                                }
+                            },
+                            onFailure = { error ->
+                                Toast.makeText(
+                                    webView.context,
+                                    Res.string.link_intermediate_failed
+                                        .asStringSource()
+                                        .getString(
+                                            mapOf(
+                                                "error" to (
+                                                    error.message
+                                                        ?: Res.string.media_unknown_error
+                                                            .asStringSource()
+                                                            .getString()
+                                                )
+                                            )
+                                        ),
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            },
+                        )
+                        return@launch
+                    }
+
                     if (!webView.canGoBack() && webView.originalUrl == null) {
                         browserComponent.closeTab(tab.tabId)
                     }
@@ -211,32 +291,27 @@ class ABDMWebViewClient(
         val url = request.url.toString()
 
         // Let WebView load normal web pages.
-        if (url.startsWith("http://") || url.startsWith("https://")) {
+        if (isHttpWebUrl(url)) {
             return false
         }
 
-        // Handle intent:// URIs
-        if (url.startsWith("intent://")) {
-            try {
-                val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-                val pm = view.context.packageManager
-
-                if (intent.resolveActivity(pm) != null) {
-                    view.context.startActivity(intent)
-                } else {
-                    intent.getStringExtra("browser_fallback_url")?.let {
-                        view.loadUrl(it)
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+        // Shorteners and ad/interstitial pages often attempt to hand navigation
+        // to Chrome through intent:// or googlechrome://. Prefer the embedded
+        // HTTP(S) destination so the redirect chain remains inside ABDM and
+        // keeps the current cookies/session.
+        extractHttpWebFallback(url)?.let { webTarget ->
+            view.loadUrl(webTarget)
             return true
         }
 
-        // Handle ALL other schemes (deep links)
+        // No usable web fallback was carried by the URI. Only now hand the
+        // deep link to an external app as a last resort.
         try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            val intent = if (url.startsWith("intent://", ignoreCase = true)) {
+                Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+            } else {
+                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            }
             val pm = view.context.packageManager
 
             if (intent.resolveActivity(pm) != null) {
