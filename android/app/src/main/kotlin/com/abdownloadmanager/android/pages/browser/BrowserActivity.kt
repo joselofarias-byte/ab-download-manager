@@ -52,7 +52,7 @@ class BrowserActivity : ABDMActivity() {
         val extraUrls = intent
             .getStringArrayListExtra(URLS_KEY)
             .orEmpty()
-            .filter(HttpUrlUtils::isValidUrl)
+            .filter { HttpUrlUtils.isValidUrl(it) }
             .distinct()
 
         if (extraUrls.isNotEmpty()) {
@@ -92,7 +92,7 @@ class BrowserActivity : ABDMActivity() {
                 action = Intent.ACTION_VIEW
                 putStringArrayListExtra(
                     URLS_KEY,
-                    ArrayList(urls.filter(HttpUrlUtils::isValidUrl).distinct()),
+                    ArrayList(urls.filter { HttpUrlUtils.isValidUrl(it) }.distinct()),
                 )
             }
         }
