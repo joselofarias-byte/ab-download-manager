@@ -42,6 +42,20 @@ class MediaPageDownloader(
         mode = MediaPageDownloadMode.AUDIO_ONLY,
     )
 
+    suspend fun downloadBestVideoWithSpanishCaptions(
+        pageUrl: String,
+    ): Result<MediaPageDownloadResult> = download(
+        pageUrl = pageUrl,
+        mode = MediaPageDownloadMode.BEST_VIDEO_SPANISH_CAPTIONS,
+    )
+
+    suspend fun downloadAllCaptions(
+        pageUrl: String,
+    ): Result<MediaPageDownloadResult> = download(
+        pageUrl = pageUrl,
+        mode = MediaPageDownloadMode.ALL_CAPTIONS,
+    )
+
     private suspend fun download(
         pageUrl: String,
         mode: MediaPageDownloadMode,
@@ -84,6 +98,29 @@ class MediaPageDownloader(
                         .addOption("-x")
                         .addOption("--audio-format", "mp3")
                         .addOption("--audio-quality", "0")
+                }
+
+                MediaPageDownloadMode.BEST_VIDEO_SPANISH_CAPTIONS -> {
+                    request
+                        .addOption(
+                            "-f",
+                            "bestvideo*+bestaudio/best",
+                        )
+                        .addOption("--merge-output-format", "mp4")
+                        .addOption("--write-subs")
+                        .addOption("--write-auto-subs")
+                        .addOption("--sub-langs", "es.*,es")
+                        .addOption("--convert-subs", "srt")
+                        .addOption("--embed-subs")
+                }
+
+                MediaPageDownloadMode.ALL_CAPTIONS -> {
+                    request
+                        .addOption("--skip-download")
+                        .addOption("--write-subs")
+                        .addOption("--write-auto-subs")
+                        .addOption("--sub-langs", "all,-live_chat")
+                        .addOption("--convert-subs", "srt")
                 }
             }
 
@@ -145,6 +182,8 @@ class MediaPageDownloader(
 enum class MediaPageDownloadMode {
     BEST_VIDEO,
     AUDIO_ONLY,
+    BEST_VIDEO_SPANISH_CAPTIONS,
+    ALL_CAPTIONS,
 }
 
 data class MediaPageDownloadResult(
