@@ -1,0 +1,282 @@
+package com.abdownloadmanager.android.pages.browser
+
+import android.content.Intent
+import android.net.Uri
+import android.webkit.CookieManager
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
+
+/**
+ * Resolves responses that Android WebView reports as downloads even though they
+ * are actually HTML interstitial/redirect pages.
+ *
+ * The resolver intentionally does not try to defeat challenges or bypass access
+ * controls. It only follows ordinary HTTP redirects/Refresh headers, preserves
+ * the browser session, and gives HTML back to the WebView so JavaScript/meta
+ * redirects can continue in the normal browser sandbox.
+ */
+class IntermediateLinkResolver(
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val maxRedirects: Int = 12,
+) {
+    suspend fun resolve(
+        url: String,
+        userAgent: String?,
+        referer: String?,
+    ): Result<IntermediateLinkResolution> = withContext(ioDispatcher) {
+        runCatching {
+            resolveBlocking(
+                initialUrl = url,
+                userAgent = userAgent,
+                initialReferer = referer,
+            )
+        }
+    }
+
+    private fun resolveBlocking(
+        initialUrl: String,
+        userAgent: String?,
+        initialReferer: String?,
+    ): IntermediateLinkResolution {
+        var currentUrl = initialUrl
+        var currentReferer = initialReferer
+
+        repeat(maxRedirects + 1) { hop ->
+            if (!isHttpWebUrl(currentUrl)) {
+                return IntermediateLinkResolution.Navigate(currentUrl)
+            }
+
+            val connection = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
+                connectTimeout = CONNECT_TIMEOUT_MS
+                readTimeout = READ_TIMEOUT_MS
+                requestMethod = "GET"
+                setRequestProperty(
+                    "Accept",
+                    "text/html,application/xhtml+xml,video/*,audio/*,*/*;q=0.8",
+                )
+                if (!userAgent.isNullOrBlank()) {
+                    setRequestProperty("User-Agent", userAgent)
+                }
+                if (!currentReferer.isNullOrBlank() && isHttpWebUrl(currentReferer)) {
+                    setRequestProperty("Referer", currentReferer)
+                }
+                CookieManager.getInstance()
+                    .getCookie(currentUrl)
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { setRequestProperty("Cookie", it) }
+            }
+
+            try {
+                val responseCode = connection.responseCode
+                copyResponseCookiesToWebView(currentUrl, connection)
+
+                if (responseCode in 300..399) {
+                    val location = connection.getHeaderField("Location")
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
+                        ?: error("Redirect HTTP $responseCode sin cabecera Location")
+
+                    val target = resolveTarget(currentUrl, location)
+                    if (!isHttpWebUrl(target)) {
+                        return IntermediateLinkResolution.Navigate(target)
+                    }
+
+                    currentReferer = currentUrl
+                    currentUrl = target
+                    return@repeat
+                }
+
+                parseRefreshTarget(connection.getHeaderField("Refresh"))
+                    ?.let { refreshTarget ->
+                        val target = resolveTarget(currentUrl, refreshTarget)
+                        if (!isHttpWebUrl(target)) {
+                            return IntermediateLinkResolution.Navigate(target)
+                        }
+                        currentReferer = currentUrl
+                        currentUrl = target
+                        return@repeat
+                    }
+
+                val contentType = connection.contentType
+                    ?.substringBefore(';')
+                    ?.trim()
+                    ?.lowercase()
+
+                val contentDisposition = connection.getHeaderField("Content-Disposition").orEmpty()
+                val looksLikeHtml =
+                    contentType == "text/html" ||
+                        contentType == "application/xhtml+xml" ||
+                        contentDisposition.contains(".html", ignoreCase = true) ||
+                        contentDisposition.contains(".htm", ignoreCase = true)
+
+                if (looksLikeHtml) {
+                    val stream = if (responseCode >= 400) {
+                        connection.errorStream
+                    } else {
+                        connection.inputStream
+                    } ?: error("Respuesta HTML vacía (HTTP $responseCode)")
+
+                    val charset = connection.contentEncoding
+                        ?.takeIf { it.isNotBlank() }
+                        ?: Charsets.UTF_8.name()
+
+                    val html = stream.bufferedReader(
+                        runCatching { charset(charset) }.getOrDefault(Charsets.UTF_8),
+                    ).use { reader ->
+                        val out = StringBuilder()
+                        val buffer = CharArray(8192)
+                        var total = 0
+                        while (true) {
+                            val read = reader.read(buffer)
+                            if (read <= 0) break
+                            val remaining = MAX_HTML_CHARS - total
+                            if (remaining <= 0) break
+                            val count = minOf(read, remaining)
+                            out.append(buffer, 0, count)
+                            total += count
+                            if (total >= MAX_HTML_CHARS) break
+                        }
+                        out.toString()
+                    }
+
+                    return IntermediateLinkResolution.HtmlPage(
+                        url = currentUrl,
+                        html = html,
+                    )
+                }
+
+                return IntermediateLinkResolution.DirectDownload(
+                    url = currentUrl,
+                    contentType = contentType,
+                )
+            } finally {
+                connection.disconnect()
+            }
+
+            if (hop == maxRedirects) {
+                error("Demasiadas redirecciones ($maxRedirects)")
+            }
+        }
+
+        error("No se pudo resolver el enlace")
+    }
+
+    private fun copyResponseCookiesToWebView(
+        url: String,
+        connection: HttpURLConnection,
+    ) {
+        connection.headerFields
+            .filterKeys { it?.equals("Set-Cookie", ignoreCase = true) == true }
+            .values
+            .flatten()
+            .filter { it.isNotBlank() }
+            .forEach { cookie ->
+                CookieManager.getInstance().setCookie(url, cookie)
+            }
+        CookieManager.getInstance().flush()
+    }
+
+    private fun parseRefreshTarget(refresh: String?): String? {
+        if (refresh.isNullOrBlank()) return null
+        val match = REFRESH_URL_REGEX.find(refresh) ?: return null
+        return match.groupValues[1]
+            .trim()
+            .trim('"', '\'')
+            .takeIf { it.isNotEmpty() }
+    }
+
+    private fun resolveTarget(baseUrl: String, target: String): String {
+        val trimmed = target.trim()
+        if (trimmed.startsWith("intent://", ignoreCase = true) ||
+            trimmed.startsWith("googlechrome://", ignoreCase = true) ||
+            trimmed.startsWith("googlechromes://", ignoreCase = true)
+        ) {
+            return trimmed
+        }
+        return URL(URL(baseUrl), trimmed).toString()
+    }
+
+    companion object {
+        private const val CONNECT_TIMEOUT_MS = 15_000
+        private const val READ_TIMEOUT_MS = 20_000
+        private const val MAX_HTML_CHARS = 1_500_000
+        private val REFRESH_URL_REGEX =
+            Regex("""(?i)(?:^|;)\s*url\s*=\s*(.+)$""")
+    }
+}
+
+sealed interface IntermediateLinkResolution {
+    data class HtmlPage(
+        val url: String,
+        val html: String,
+    ) : IntermediateLinkResolution
+
+    data class DirectDownload(
+        val url: String,
+        val contentType: String?,
+    ) : IntermediateLinkResolution
+
+    data class Navigate(
+        val url: String,
+    ) : IntermediateLinkResolution
+}
+
+fun isHttpWebUrl(url: String?): Boolean {
+    return url?.startsWith("http://", ignoreCase = true) == true ||
+        url?.startsWith("https://", ignoreCase = true) == true
+}
+
+/**
+ * Extracts the web destination carried by common browser/deep-link schemes.
+ * This keeps shortener flows inside ABDM whenever the custom URI already
+ * contains a safe HTTP(S) fallback.
+ */
+fun extractHttpWebFallback(rawUrl: String): String? {
+    if (isHttpWebUrl(rawUrl)) return rawUrl
+
+    if (rawUrl.startsWith("intent://", ignoreCase = true)) {
+        runCatching {
+            Intent.parseUri(rawUrl, Intent.URI_INTENT_SCHEME)
+        }.getOrNull()?.let { intent ->
+            intent.getStringExtra("browser_fallback_url")
+                ?.takeIf(::isHttpWebUrl)
+                ?.let { return it }
+
+            intent.dataString
+                ?.takeIf(::isHttpWebUrl)
+                ?.let { return it }
+        }
+    }
+
+    val uri = runCatching { Uri.parse(rawUrl) }.getOrNull() ?: return null
+    val scheme = uri.scheme.orEmpty()
+
+    if (scheme.equals("googlechrome", ignoreCase = true) ||
+        scheme.equals("googlechromes", ignoreCase = true)
+    ) {
+        uri.getQueryParameter("url")
+            ?.takeIf(::isHttpWebUrl)
+            ?.let { return it }
+    }
+
+    for (key in WEB_TARGET_QUERY_KEYS) {
+        uri.getQueryParameter(key)
+            ?.takeIf(::isHttpWebUrl)
+            ?.let { return it }
+    }
+
+    return null
+}
+
+private val WEB_TARGET_QUERY_KEYS = listOf(
+    "url",
+    "uri",
+    "link",
+    "target",
+    "redirect",
+    "redirect_url",
+)
