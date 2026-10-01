@@ -1,6 +1,7 @@
 package com.abdownloadmanager.android.pages.browser
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.content.Intent
 import android.net.Uri
 import android.os.Message
@@ -159,10 +160,23 @@ class ABDMWebViewClient(
     override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
         if (request != null) {
             scope.launch(Dispatchers.Main) {
+                val pageUrl = view?.url ?: view?.originalUrl
+                val headers = request.requestHeaders.toMutableMap()
+                if (headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+                    view?.settings?.userAgentString
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { headers["User-Agent"] = it }
+                }
+                if (
+                    pageUrl != null &&
+                    headers.keys.none { it.equals("Referer", ignoreCase = true) }
+                ) {
+                    headers["Referer"] = pageUrl
+                }
                 val webRequest = ABDMWebRequest(
                     url = request.url.toString(),
-                    headers = request.requestHeaders,
-                    page = view?.originalUrl ?: view?.url
+                    headers = headers,
+                    page = pageUrl,
                 )
                 requestInterceptor.interceptRequest(webRequest)
                 (view as? ABDMWebView)?.tabId?.let { tabId ->
@@ -176,6 +190,19 @@ class ABDMWebViewClient(
         return super.shouldInterceptRequest(view, request)
     }
 
+    override fun onPageStarted(
+        view: WebView?,
+        url: String?,
+        favicon: Bitmap?,
+    ) {
+        super.onPageStarted(view, url, favicon)
+        if (url != null) {
+            (view as? ABDMWebView)?.tabId?.let { tabId ->
+                mediaCatcher.onPageNavigation(tabId, url)
+            }
+        }
+    }
+
     override fun shouldOverrideUrlLoading(
         view: WebView,
         request: WebResourceRequest
@@ -185,11 +212,6 @@ class ABDMWebViewClient(
 
         // Let WebView load normal web pages.
         if (url.startsWith("http://") || url.startsWith("https://")) {
-            if (request.isForMainFrame) {
-                (view as? ABDMWebView)?.tabId?.let { tabId ->
-                    mediaCatcher.onPageNavigation(tabId, url)
-                }
-            }
             return false
         }
 
