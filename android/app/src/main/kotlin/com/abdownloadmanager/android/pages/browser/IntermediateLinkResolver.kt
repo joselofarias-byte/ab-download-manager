@@ -120,13 +120,21 @@ class IntermediateLinkResolver(
                         connection.inputStream
                     } ?: error("Respuesta HTML vacía (HTTP $responseCode)")
 
-                    val charset = connection.contentEncoding
+                    val charsetName = connection.contentType
+                        ?.substringAfter("charset=", missingDelimiterValue = "")
+                        ?.substringBefore(';')
+                        ?.trim()
+                        ?.trim('"', '\'')
                         ?.takeIf { it.isNotBlank() }
-                        ?: Charsets.UTF_8.name()
 
-                    val html = stream.bufferedReader(
-                        runCatching { charset(charset) }.getOrDefault(Charsets.UTF_8),
-                    ).use { reader ->
+                    val responseCharset = charsetName
+                        ?.let {
+                            runCatching { java.nio.charset.Charset.forName(it) }
+                                .getOrNull()
+                        }
+                        ?: Charsets.UTF_8
+
+                    val html = stream.bufferedReader(responseCharset).use { reader ->
                         val out = StringBuilder()
                         val buffer = CharArray(8192)
                         var total = 0
@@ -169,14 +177,15 @@ class IntermediateLinkResolver(
         url: String,
         connection: HttpURLConnection,
     ) {
-        connection.headerFields
-            .filterKeys { it?.equals("Set-Cookie", ignoreCase = true) == true }
-            .values
-            .flatten()
-            .filter { it.isNotBlank() }
-            .forEach { cookie ->
-                CookieManager.getInstance().setCookie(url, cookie)
+        connection.headerFields.forEach { (name, values) ->
+            if (name?.equals("Set-Cookie", ignoreCase = true) == true) {
+                values.orEmpty()
+                    .filter { it.isNotBlank() }
+                    .forEach { cookie ->
+                        CookieManager.getInstance().setCookie(url, cookie)
+                    }
             }
+        }
         CookieManager.getInstance().flush()
     }
 
