@@ -40,6 +40,8 @@ class BrowserComponent(
 ) : BaseComponent(
     componentContext,
 ), ContainsEffects<BrowserComponent.Effects> by supportEffects() {
+    val mediaCatcher = MediaCatcher()
+
     val downloadInterceptor = DownloadInterceptor(
         scope, {
             val intent = when (it.size) {
@@ -89,9 +91,17 @@ class BrowserComponent(
                         +createAddToBookmarkAction(url, title)
                     }
                 }
-                tab?.let {
+                tab?.let { activeTab ->
+                    val mediaCandidates = mediaCatcher.getDownloadableCandidates(activeTab.tabId)
+                    if (mediaCandidates.isNotEmpty()) {
+                        separator()
+                        +createDownloadDetectedMediaAction(
+                            tab = activeTab,
+                            candidates = mediaCandidates,
+                        )
+                    }
                     separator()
-                    +createCloseTabAction(it)
+                    +createCloseTabAction(activeTab)
                 }
             }
         )
@@ -137,6 +147,7 @@ class BrowserComponent(
     }
 
     fun closeTab(tabId: ABDMBrowserTabId) {
+        mediaCatcher.clearTab(tabId)
         tabs.update {
             val newItems = it.tabs.filterNot { it.tabId == tabId }
             it.copy(
@@ -352,6 +363,23 @@ class BrowserComponent(
             MyIcons.remove,
         ) {
             removeBookmark(url)
+        }
+    }
+
+    fun createDownloadDetectedMediaAction(
+        tab: ABDMBrowserTab,
+        candidates: List<MediaCandidate>,
+    ): AnAction {
+        return simpleAction(
+            title = "Detected media (${candidates.size})".asStringSource(),
+            icon = MyIcons.videoFile,
+        ) {
+            downloadInterceptor.onDownloadRequests(
+                webRequests = candidates.map { it.request },
+                userAgent = null,
+                tab = tab,
+            )
+            closeMainMenu()
         }
     }
 
