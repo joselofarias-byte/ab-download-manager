@@ -30,6 +30,9 @@ android {
         applicationId = getApplicationPackageName()
         versionCode = getAppVersion().convertToVersionCode()
         versionName = getAppVersionString()
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
     compileSdk = compileSdkVersion
     namespace = "com.abdownloadmanager.android"
