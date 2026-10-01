@@ -2,6 +2,7 @@ package com.abdownloadmanager.android.pages.browser
 
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import androidx.compose.runtime.Stable
 import com.abdownloadmanager.android.pages.add.multiple.AddMultiDownloadActivity
 import com.abdownloadmanager.android.pages.add.single.AddSingleDownloadActivity
@@ -25,9 +26,12 @@ import ir.amirab.util.compose.action.buildMenu
 import ir.amirab.util.compose.action.simpleAction
 import ir.amirab.util.compose.asStringSource
 import ir.amirab.util.ifThen
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.util.UUID
 import kotlin.text.orEmpty
@@ -41,6 +45,7 @@ class BrowserComponent(
     componentContext,
 ), ContainsEffects<BrowserComponent.Effects> by supportEffects() {
     val mediaCatcher = MediaCatcher()
+    private val mediaPageDownloader = MediaPageDownloader(context)
 
     val downloadInterceptor = DownloadInterceptor(
         scope, {
@@ -85,6 +90,11 @@ class BrowserComponent(
                 separator()
                 +createShowBookmarksAction()
                 if (url != null) {
+                    if (url.startsWith("http://") || url.startsWith("https://")) {
+                        separator()
+                        +createDownloadPageVideoAction(url)
+                        +createDownloadPageAudioAction(url)
+                    }
                     if (isBookmarked(url)) {
                         +createRemoveFromBookmarkAction(url)
                     } else {
@@ -377,6 +387,57 @@ class BrowserComponent(
             userAgent = null,
             tab = tab,
         )
+    }
+
+    private fun startPageMediaDownload(
+        url: String,
+        audioOnly: Boolean,
+    ) {
+        closeMainMenu()
+        scope.launch {
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    context,
+                    if (audioOnly) "Resolving audio..." else "Resolving video...",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+
+            val result = if (audioOnly) {
+                mediaPageDownloader.downloadAudioOnly(url)
+            } else {
+                mediaPageDownloader.downloadBestVideo(url)
+            }
+
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    context,
+                    result.fold(
+                        onSuccess = { "Saved in Download/ABDownloadManager/Media" },
+                        onFailure = { "Media download failed: ${it.message ?: "unknown error"}" },
+                    ),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+
+    fun createDownloadPageVideoAction(url: String): AnAction {
+        return simpleAction(
+            title = "Download page video (best)".asStringSource(),
+            icon = MyIcons.videoFile,
+        ) {
+            startPageMediaDownload(url, audioOnly = false)
+        }
+    }
+
+    fun createDownloadPageAudioAction(url: String): AnAction {
+        return simpleAction(
+            title = "Download page audio (MP3)".asStringSource(),
+            icon = MyIcons.musicFile,
+        ) {
+            startPageMediaDownload(url, audioOnly = true)
+        }
     }
 
     fun createDownloadDetectedMediaAction(
