@@ -311,6 +311,10 @@ abstract class BaseAddMultiDownloadComponent(
     fun getItemsToAdd(categorySelectionMode: CategorySelectionMode?): List<NewDownloadItemProps> {
         return totalList
             .filter { it.getUniqueId() in selectionList }
+            // A web page is an intermediate/navigation target, not a downloadable file.
+            // Single-add already treats these as "Open in browser"; keep multi-add
+            // from accidentally queueing tiny .html interstitials.
+            .filter { it.newDownloadUiChecker.responseInfo.value?.isWebPage != true }
             .filter {
                 val checker = it.newDownloadUiChecker
                 checker.canAdd.value
@@ -447,13 +451,26 @@ abstract class BaseAddMultiDownloadComponent(
 
     private fun NewDownloadInputs<*, *, *, *, *>.asNewDownloadState(): Flow<NewMultiDownloadState> {
         val id = this@asNewDownloadState.getUniqueId()
+        val sizeState = combine(
+            newDownloadUiChecker.downloadSize,
+            lengthStringFlow,
+        ) { downloadSize, lengthString ->
+            downloadSize to lengthString
+        }
+        val responseState = combine(
+            newDownloadUiChecker.lastErrorReason,
+            newDownloadUiChecker.responseInfo,
+        ) { lastErrorReason, responseInfo ->
+            lastErrorReason to (responseInfo?.isWebPage == true)
+        }
         return combine(
             name,
             credentials,
-            newDownloadUiChecker.downloadSize,
-            lengthStringFlow,
-            newDownloadUiChecker.lastErrorReason,
-        ) { name, credentials, downloadSize, lengthString, lastErrorReason ->
+            sizeState,
+            responseState,
+        ) { name, credentials, sizeState, responseState ->
+            val (downloadSize, lengthString) = sizeState
+            val (lastErrorReason, isWebPage) = responseState
             NewMultiDownloadState(
                 id = id,
                 name = name,
@@ -461,6 +478,7 @@ abstract class BaseAddMultiDownloadComponent(
                 sizeString = lengthString,
                 link = credentials.link,
                 lastErrorReason = lastErrorReason,
+                isWebPage = isWebPage,
             )
         }
     }
@@ -478,4 +496,5 @@ data class NewMultiDownloadState(
     val sizeString: StringSource,
     val link: String,
     val lastErrorReason: DownloadErrorReason?,
+    val isWebPage: Boolean,
 )
