@@ -401,10 +401,10 @@ class BrowserComponent(
                 Toast.makeText(
                     context,
                     when (mode) {
-                        MediaPageDownloadMode.AUDIO_ONLY -> "Resolving audio..."
-                        MediaPageDownloadMode.ALL_CAPTIONS -> "Resolving captions..."
-                        MediaPageDownloadMode.BEST_VIDEO_SPANISH_CAPTIONS -> "Resolving video + Spanish captions..."
-                        MediaPageDownloadMode.BEST_VIDEO -> "Resolving video..."
+                        MediaPageDownloadMode.AUDIO_ONLY -> "Preparando audio..."
+                        MediaPageDownloadMode.ALL_CAPTIONS -> "Preparando subtítulos..."
+                        MediaPageDownloadMode.BEST_VIDEO_SPANISH_CAPTIONS -> "Preparando video + subtítulos en español..."
+                        MediaPageDownloadMode.BEST_VIDEO -> "Preparando video..."
                     },
                     Toast.LENGTH_SHORT,
                 ).show()
@@ -423,8 +423,8 @@ class BrowserComponent(
                 Toast.makeText(
                     context,
                     result.fold(
-                        onSuccess = { "Saved in Download/ABDownloadManager/Media" },
-                        onFailure = { "Media download failed: ${it.message ?: "unknown error"}" },
+                        onSuccess = { "Guardado en Download/ABDownloadManager/Media" },
+                        onFailure = { "Falló la descarga multimedia: ${it.message ?: "error desconocido"}" },
                     ),
                     Toast.LENGTH_LONG,
                 ).show()
@@ -434,7 +434,7 @@ class BrowserComponent(
 
     fun createDownloadPageVideoAction(url: String): AnAction {
         return simpleAction(
-            title = "Download page video (best)".asStringSource(),
+            title = "Descargar video (mejor calidad)".asStringSource(),
             icon = MyIcons.videoFile,
         ) {
             startPageMediaDownload(url, MediaPageDownloadMode.BEST_VIDEO)
@@ -443,7 +443,7 @@ class BrowserComponent(
 
     fun createDownloadPageVideoSpanishCaptionsAction(url: String): AnAction {
         return simpleAction(
-            title = "Download video + Spanish captions".asStringSource(),
+            title = "Descargar video + subtítulos en español".asStringSource(),
             icon = MyIcons.videoFile,
         ) {
             startPageMediaDownload(
@@ -455,7 +455,7 @@ class BrowserComponent(
 
     fun createDownloadPageAudioAction(url: String): AnAction {
         return simpleAction(
-            title = "Download page audio (MP3)".asStringSource(),
+            title = "Descargar audio (MP3)".asStringSource(),
             icon = MyIcons.musicFile,
         ) {
             startPageMediaDownload(url, MediaPageDownloadMode.AUDIO_ONLY)
@@ -464,7 +464,7 @@ class BrowserComponent(
 
     fun createDownloadPageAllCaptionsAction(url: String): AnAction {
         return simpleAction(
-            title = "Download all captions (SRT)".asStringSource(),
+            title = "Descargar todos los subtítulos (SRT)".asStringSource(),
             icon = MyIcons.documentFile,
         ) {
             startPageMediaDownload(
