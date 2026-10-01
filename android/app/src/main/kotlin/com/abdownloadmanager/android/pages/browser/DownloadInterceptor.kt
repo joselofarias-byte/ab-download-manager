@@ -50,16 +50,40 @@ class DownloadInterceptor(
         )
         onNewDownload(
             listOf(
-                AddDownloadCredentialsInUiProps(
-                    HttpDownloadCredentials(
-                        link = webRequest.url,
-                        headers = webRequest.headers,
-                        downloadPage = webRequest.page,
-                    ),
-                    AddDownloadCredentialsInUiProps.Configs()
-                )
+                webRequest.toDownloadCredentialsInUiProps()
             )
         )
+    }
+
+    /**
+     * Opens the normal AB Download Manager add-download flow for requests that
+     * were observed inside the embedded browser. Request headers, Referer and
+     * browser cookies are preserved so media URLs that depend on the current
+     * session can still be fetched by the downloader.
+     */
+    fun onDownloadRequests(
+        webRequests: List<ABDMWebRequest>,
+        userAgent: String?,
+        tab: ABDMBrowserTab,
+    ) {
+        val downloads = webRequests
+            .asSequence()
+            .filter { HttpUrlUtils.isValidUrl(it.url) }
+            .distinctBy { it.url }
+            .map { request ->
+                request
+                    .copy(
+                        page = request.page ?: getPageUrl(tab.tabState),
+                    )
+                    .withUserAgent(userAgent)
+                    .withCookieManagerCookies()
+                    .toDownloadCredentialsInUiProps()
+            }
+            .toList()
+
+        if (downloads.isNotEmpty()) {
+            onNewDownload(downloads)
+        }
     }
 
     override fun interceptRequest(
@@ -95,30 +119,52 @@ class DownloadInterceptor(
             .withCookieManagerCookies()
     }
 
+    private fun ABDMWebRequest.toDownloadCredentialsInUiProps(): AddDownloadCredentialsInUiProps {
+        return AddDownloadCredentialsInUiProps(
+            HttpDownloadCredentials(
+                link = url,
+                headers = headers,
+                downloadPage = page,
+            ),
+            AddDownloadCredentialsInUiProps.Configs()
+        )
+    }
+
     private fun ABDMWebRequest.withUserAgent(userAgent: String?): ABDMWebRequest {
-        val request = this
         if (userAgent == null) {
-            return request
+            return this
         }
-        val userAgentKey = "User-Agent"
-        if (request.headers.containsKey(userAgentKey)) {
-            return request
+        val existingKey = headers.keys.firstOrNull {
+            it.equals(USER_AGENT_HEADER, ignoreCase = true)
         }
-        return request.copy(
-            headers = request.headers.plus(
-                userAgentKey to userAgent
+        if (existingKey != null) {
+            return this
+        }
+        return copy(
+            headers = headers.plus(
+                USER_AGENT_HEADER to userAgent
             )
         )
     }
 
     private fun ABDMWebRequest.withCookieManagerCookies(): ABDMWebRequest {
-        val request = this
         val cookieFromCookieManager =
-            CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() } ?: return request
-        val cookieKey = "Cookie"
-        val currentCookie = request.headers[cookieKey]?.takeIf { it.isNotBlank() }
-        return request.copy(
-            headers = request.headers.plus(
+            CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() } ?: return this
+
+        val currentKey = headers.keys.firstOrNull {
+            it.equals(COOKIE_HEADER, ignoreCase = true)
+        }
+        val currentCookie = currentKey
+            ?.let(headers::get)
+            ?.takeIf { it.isNotBlank() }
+
+        if (currentCookie?.contains(cookieFromCookieManager) == true) {
+            return this
+        }
+
+        val cookieKey = currentKey ?: COOKIE_HEADER
+        return copy(
+            headers = headers.plus(
                 cookieKey to if (currentCookie != null) {
                     "$currentCookie; $cookieFromCookieManager"
                 } else {
@@ -134,5 +180,7 @@ class DownloadInterceptor(
 
     companion object {
         private const val REMOVE_REQUESTS_DELAY = 20_000L
+        private const val COOKIE_HEADER = "Cookie"
+        private const val USER_AGENT_HEADER = "User-Agent"
     }
 }
