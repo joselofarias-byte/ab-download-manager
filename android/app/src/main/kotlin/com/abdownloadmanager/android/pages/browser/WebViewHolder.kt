@@ -894,28 +894,52 @@ private fun devUploadsAutomationScript(): String = """
     }
 
     const candidates = Array.from(document.querySelectorAll(
-      'button, a, input[type="submit"], input[type="button"]'
+      'button, a, input[type="submit"], input[type="button"], [role="button"], .btn, [onclick]'
     ));
 
     const freeButton = candidates.find((el) => {
       if (!isVisible(el)) return false;
       const label = labelOf(el);
       if (/premium|prima|sponsor|advert|anuncio|ads?/i.test(label)) return false;
-      return /^(free\s*download|liberta\s+descarga|descarga\s+gratis|download\s+free|continue|continuar)$/i.test(label);
+      return /(free\s*download|liberta\s+descarga|descarga\s+gratis|download\s+free|continue|continuar)/i.test(label);
     });
 
     if (freeButton) {
-      clearInterval(timer);
-      log('auto-click DevUploads button: ' + labelOf(freeButton));
-      overlay.remove();
-      freeButton.click();
-      return;
+      const label = labelOf(freeButton);
+      const disabledByAttribute =
+        freeButton.disabled === true ||
+        freeButton.getAttribute('aria-disabled') === 'true' ||
+        freeButton.classList.contains('disabled');
+
+      if (disabledByAttribute) {
+        if (checks % 10 === 0) {
+          log('DevUploads free button visible but still disabled: ' + label);
+        }
+      } else {
+        clearInterval(timer);
+        log('auto-click DevUploads button: ' + label);
+        overlay.remove();
+
+        const clickable =
+          freeButton.closest('button, a, [role="button"], .btn, [onclick]') ||
+          freeButton;
+        clickable.click();
+        return;
+      }
+    } else if (checks % 20 === 0) {
+      const labels = candidates
+        .filter(isVisible)
+        .map(labelOf)
+        .filter(Boolean)
+        .filter((label) => label.length <= 80)
+        .slice(0, 12);
+      log('DevUploads visible controls: ' + labels.join(' | '));
     }
 
-    if (checks >= 180) {
+    if (checks >= 240) {
       clearInterval(timer);
       overlay.remove();
-      log('DevUploads free/continue button not found after 90s');
+      log('DevUploads free/continue button not actionable after 120s');
     }
   }, 500);
 
