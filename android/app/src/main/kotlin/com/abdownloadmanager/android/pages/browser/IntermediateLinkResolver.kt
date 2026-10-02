@@ -302,24 +302,11 @@ fun extractHttpWebFallback(rawUrl: String): String? {
 fun extractShortXLinksFastForward(rawUrl: String): String? {
     val uri = runCatching { Uri.parse(rawUrl) }.getOrNull() ?: return null
 
-    uri.getQueryParameter("adlinkfly")
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() }
-        ?.let { payload ->
-            val slug = payload.substringBefore('?').trim().trim('/')
-            val token = payload.substringAfter('?', missingDelimiterValue = "").trim()
-            if (slug.matches(Regex("""[A-Za-z0-9_-]+"""))) {
-                return buildString {
-                    append("https://shortxlinks.com/")
-                    append(slug)
-                    if (token.isNotEmpty()) {
-                        append('?')
-                        append(token)
-                    }
-                }
-            }
-        }
-
+    // IMPORTANT: do not reconstruct ?adlinkfly=... directly. ShortXLinks
+    // validates the server-side wait/session state and answers "Too Early"
+    // when the token is consumed before the wrapper timer has matured.
+    // We only unwrap safelink_redirect here because that value already
+    // represents a completed wrapper step.
     val encoded = uri.getQueryParameter("safelink_redirect")
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
