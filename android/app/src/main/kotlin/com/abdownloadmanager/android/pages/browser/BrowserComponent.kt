@@ -160,6 +160,7 @@ class BrowserComponent(
 
     fun closeTab(tabId: ABDMBrowserTabId) {
         mediaCatcher.clearTab(tabId)
+        ShortLinkTrace.unregisterTab(tabId)
         tabs.update {
             val newItems = it.tabs.filterNot { it.tabId == tabId }
             it.copy(
