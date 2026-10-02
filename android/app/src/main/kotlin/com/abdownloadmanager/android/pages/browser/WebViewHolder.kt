@@ -55,6 +55,7 @@ class WebViewRegistry(
                     requestInterceptor = browserComponent.downloadInterceptor,
                     mediaCatcher = browserComponent.mediaCatcher,
                     scope = scope,
+                    closeTab = browserComponent::closeTab,
                 ),
                 chromeClient = ABDMChromeClient(browserComponent, ::getWebViewHolder),
                 webViewFactory = this,
@@ -277,6 +278,7 @@ class ABDMWebViewClient(
     private val requestInterceptor: DownloadInterceptor,
     private val mediaCatcher: MediaCatcher,
     private val scope: CoroutineScope,
+    private val closeTab: (String) -> Unit,
 ) : AccompanistWebViewClient() {
     override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
         if (request != null) {
@@ -389,8 +391,22 @@ class ABDMWebViewClient(
         Log.d(TAG, navigationMessage)
         ShortLinkTrace.record(navigationMessage)
 
-        val shortLinkMode = ShortLinkTrace.isTabActive((view as? ABDMWebView)?.tabId)
+        val shortLinkTabId = (view as? ABDMWebView)?.tabId
+        val shortLinkMode = ShortLinkTrace.isTabActive(shortLinkTabId)
         if (shortLinkMode && isMainFrame && isHttpWebUrl(url)) {
+            val host = request.url.host.orEmpty().lowercase()
+
+            if (isKnownShortLinkAdHost(host)) {
+                Log.d(TAG, "  -> blocked known ad host: $host")
+                ShortLinkTrace.record("blocked ad host=$host url=$url")
+                if (shortLinkTabId != null) {
+                    scope.launch(Dispatchers.Main) {
+                        closeTab(shortLinkTabId)
+                    }
+                }
+                return true
+            }
+
             extractShortXLinksFastForward(url)
                 ?.takeIf { it != url }
                 ?.let { target ->
@@ -462,25 +478,19 @@ class ABDMChromeClient(
         if (view == null) return false
 
         val openerTabId = (view as? ABDMWebView)?.tabId
-        val openerHost = runCatching {
-            Uri.parse(view.url).host.orEmpty().lowercase()
-        }.getOrDefault("")
-        if (
-            ShortLinkTrace.isTabActive(openerTabId) &&
-            (openerHost == "devuploads.com" || openerHost.endsWith(".devuploads.com"))
-        ) {
-            Log.d(TAG, "  -> blocked DevUploads popup in ShortXLinks mode")
-            ShortLinkTrace.record("blocked popup opener=${view.url}")
-            return false
-        }
+        val shortLinkMode = ShortLinkTrace.isTabActive(openerTabId)
 
         val transport = (resultMsg?.obj as? WebView.WebViewTransport) ?: return false
         val newTab = browserComponent.newTab(
             id = UUID.randomUUID().toString(),
-            switch = true,
+            switch = !shortLinkMode,
             url = null,
-            openedBy = (view as? ABDMWebView)?.tabId
+            openedBy = openerTabId
         )
+        if (shortLinkMode) {
+            ShortLinkTrace.registerTab(newTab.tabId)
+            ShortLinkTrace.record("popup opened hidden tab=${newTab.tabId} opener=${view.url}")
+        }
         val newWebView = createWebViewHolder(newTab).activate(view.context)
         newWebView.openedBy = view.originalUrl ?: view.url
         transport.webView = newWebView
@@ -531,6 +541,17 @@ internal fun normalizeWebViewUserAgent(ua: String): String {
 /**
  * Logs whether cookies exist for the given URL. Does NOT log values.
  */
+private fun isKnownShortLinkAdHost(host: String): Boolean {
+    if (host.isBlank()) return false
+    return host == "ndcertainlywhen.com" ||
+        host.endsWith(".ndcertainlywhen.com") ||
+        host == "smartfeecalculator.com" ||
+        host.endsWith(".smartfeecalculator.com") ||
+        host == "control.kochava.com" ||
+        host.endsWith(".kochava.com") ||
+        host.endsWith(".x9m.workers.dev")
+}
+
 private fun logCookiePresence(url: String?) {
     if (url == null) return
     try {
