@@ -26,12 +26,14 @@ object ShortLinkTrace {
     private var appContext: Context? = null
     private var outputUri: Uri? = null
     private var fileName: String? = null
+    private val activeTabIds = linkedSetOf<String>()
 
     @Synchronized
     fun start(context: Context, urls: List<String>) {
         if (urls.none(::isShortLinkUrl)) return
 
         appContext = context.applicationContext
+        activeTabIds.clear()
         fileName = "ABDM-ShortXLinks-" +
             SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) +
             ".txt"
@@ -42,6 +44,25 @@ object ShortLinkTrace {
         record("urls=" + urls.joinToString(" | "))
         record("destination=" + destinationDescription())
     }
+
+    @Synchronized
+    fun registerTab(tabId: String) {
+        activeTabIds += tabId
+        record("registerTab id=$tabId")
+    }
+
+    @Synchronized
+    fun isTabActive(tabId: String?): Boolean {
+        return tabId != null && tabId in activeTabIds
+    }
+
+    @Synchronized
+    fun unregisterTab(tabId: String?) {
+        if (tabId != null && activeTabIds.remove(tabId)) {
+            record("unregisterTab id=$tabId")
+        }
+    }
+
 
     @Synchronized
     fun record(message: String) {
