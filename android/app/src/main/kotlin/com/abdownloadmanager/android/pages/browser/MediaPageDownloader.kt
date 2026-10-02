@@ -1,6 +1,7 @@
 package com.abdownloadmanager.android.pages.browser
 
 import android.content.Context
+import android.net.Uri
 import android.os.Environment
 import android.util.Log
 import android.webkit.CookieManager
@@ -85,6 +86,10 @@ class MediaPageDownloader(
                 )
 
             addBrowserSessionHeaders(request, pageUrl)
+            val cookieFile = createBrowserCookieFile(pageUrl)
+            cookieFile?.let {
+                request.addOption("--cookies", it.absolutePath)
+            }
 
             when (mode) {
                 MediaPageDownloadMode.BEST_VIDEO -> {
@@ -129,27 +134,31 @@ class MediaPageDownloader(
             }
 
             val processId = "abdm-media-" + UUID.randomUUID().toString()
-            val response = YoutubeDL.getInstance().execute(
-                request,
-                processId,
-            ) { _, _, _ ->
-                // Progress UI will be wired in the next wave. Execution itself
-                // already runs off the main thread.
-            }
+            try {
+                val response = YoutubeDL.getInstance().execute(
+                    request,
+                    processId,
+                ) { _, _, _ ->
+                    // Progress UI will be wired in the next wave. Execution itself
+                    // already runs off the main thread.
+                }
 
-            if (response.exitCode != 0) {
-                error(
-                    response.err.ifBlank {
-                        "yt-dlp exited with code ${response.exitCode}"
-                    }
+                if (response.exitCode != 0) {
+                    error(
+                        response.err.ifBlank {
+                            "yt-dlp exited with code ${response.exitCode}"
+                        }
+                    )
+                }
+
+                MediaPageDownloadResult(
+                    pageUrl = pageUrl,
+                    mode = mode,
+                    outputDirectory = outputDir.absolutePath,
                 )
+            } finally {
+                runCatching { cookieFile?.delete() }
             }
-
-            MediaPageDownloadResult(
-                pageUrl = pageUrl,
-                mode = mode,
-                outputDirectory = outputDir.absolutePath,
-            )
         }
     }
 
@@ -206,13 +215,63 @@ class MediaPageDownloader(
         }
 
         request.addOption("--referer", pageUrl)
+    }
 
-        CookieManager.getInstance()
+    /**
+     * yt-dlp no longer accepts browser cookies through a raw Cookie header.
+     * Export the active WebView session into a short-lived Netscape cookie jar
+     * and pass it with --cookies instead.
+     */
+    private fun createBrowserCookieFile(pageUrl: String): File? {
+        val rawCookies = CookieManager.getInstance()
             .getCookie(pageUrl)
             ?.takeIf { it.isNotBlank() }
-            ?.let { cookie ->
-                request.addOption("--add-headers", "Cookie:$cookie")
+            ?: return null
+
+        val uri = runCatching { Uri.parse(pageUrl) }.getOrNull() ?: return null
+        val host = uri.host?.takeIf { it.isNotBlank() } ?: return null
+        val secure = uri.scheme.equals("https", ignoreCase = true)
+
+        val pairs = rawCookies
+            .split(';')
+            .mapNotNull { entry ->
+                val trimmed = entry.trim()
+                val separator = trimmed.indexOf('=')
+                if (separator <= 0) return@mapNotNull null
+                val name = trimmed.substring(0, separator).trim()
+                val value = trimmed.substring(separator + 1).trim()
+                if (name.isBlank()) null else name to value
             }
+
+        if (pairs.isEmpty()) return null
+
+        val cookieFile = File(
+            context.cacheDir,
+            "abdm-yt-dlp-cookies-${UUID.randomUUID()}.txt",
+        )
+
+        cookieFile.bufferedWriter().use { writer ->
+            writer.appendLine("# Netscape HTTP Cookie File")
+            writer.appendLine("# Exported temporarily from ABDM WebView for yt-dlp")
+            pairs.forEach { (name, value) ->
+                writer.append(host)
+                    .append('\t')
+                    .append("FALSE")
+                    .append('\t')
+                    .append("/")
+                    .append('\t')
+                    .append(if (secure) "TRUE" else "FALSE")
+                    .append('\t')
+                    .append("0")
+                    .append('\t')
+                    .append(name)
+                    .append('\t')
+                    .append(value)
+                    .appendLine()
+            }
+        }
+
+        return cookieFile
     }
 }
 
