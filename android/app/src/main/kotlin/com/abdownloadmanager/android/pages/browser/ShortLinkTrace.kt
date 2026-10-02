@@ -30,7 +30,7 @@ object ShortLinkTrace {
 
     @Synchronized
     fun start(context: Context, urls: List<String>) {
-        if (urls.none(::isShortLinkUrl)) return
+        if (urls.none(::isHttpWebUrl)) return
 
         appContext = context.applicationContext
         activeTabIds.clear()
