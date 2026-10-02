@@ -311,10 +311,16 @@ abstract class BaseAddMultiDownloadComponent(
     fun getItemsToAdd(categorySelectionMode: CategorySelectionMode?): List<NewDownloadItemProps> {
         return totalList
             .filter { it.getUniqueId() in selectionList }
-            // A web page is an intermediate/navigation target, not a downloadable file.
-            // Single-add already treats these as "Open in browser"; keep multi-add
-            // from accidentally queueing tiny .html interstitials.
-            .filter { it.newDownloadUiChecker.responseInfo.value?.isWebPage != true }
+            // Do not queue until the async link probe has positively classified
+            // the target as a successful non-web response. This closes a race
+            // where a just-added HTML shortener could be queued before
+            // responseInfo arrived and later fail as "unexpected web page".
+            .filter {
+                val responseInfo = it.newDownloadUiChecker.responseInfo.value
+                responseInfo != null &&
+                        responseInfo.isSuccessFul &&
+                        !responseInfo.isWebPage
+            }
             .filter {
                 val checker = it.newDownloadUiChecker
                 checker.canAdd.value
@@ -460,8 +466,19 @@ abstract class BaseAddMultiDownloadComponent(
         val responseState = combine(
             newDownloadUiChecker.lastErrorReason,
             newDownloadUiChecker.responseInfo,
-        ) { lastErrorReason, responseInfo ->
-            lastErrorReason to (responseInfo?.isWebPage == true)
+            newDownloadUiChecker.gettingResponseInfo,
+            newDownloadUiChecker.responseResult,
+        ) { lastErrorReason, responseInfo, isChecking, responseResult ->
+            val isWebPage = responseInfo?.isWebPage == true
+            MultiDownloadResponseState(
+                lastErrorReason = lastErrorReason,
+                isWebPage = isWebPage,
+                canDirectDownload = responseResult != null &&
+                        !isChecking &&
+                        responseInfo?.isSuccessFul == true &&
+                        !isWebPage &&
+                        lastErrorReason == null,
+            )
         }
         return combine(
             name,
@@ -470,15 +487,15 @@ abstract class BaseAddMultiDownloadComponent(
             responseState,
         ) { name, credentials, sizeState, responseState ->
             val (downloadSize, lengthString) = sizeState
-            val (lastErrorReason, isWebPage) = responseState
             NewMultiDownloadState(
                 id = id,
                 name = name,
                 size = downloadSize,
                 sizeString = lengthString,
                 link = credentials.link,
-                lastErrorReason = lastErrorReason,
-                isWebPage = isWebPage,
+                lastErrorReason = responseState.lastErrorReason,
+                isWebPage = responseState.isWebPage,
+                canDirectDownload = responseState.canDirectDownload,
             )
         }
     }
@@ -489,6 +506,13 @@ abstract class BaseAddMultiDownloadComponent(
  * this is used to represent multiple download list table
  */
 @Immutable
+private data class MultiDownloadResponseState(
+    val lastErrorReason: DownloadErrorReason?,
+    val isWebPage: Boolean,
+    val canDirectDownload: Boolean,
+)
+
+@Immutable
 data class NewMultiDownloadState(
     val id: NewDownloadInputsUniqueIdType,
     val name: String,
@@ -497,4 +521,5 @@ data class NewMultiDownloadState(
     val link: String,
     val lastErrorReason: DownloadErrorReason?,
     val isWebPage: Boolean,
+    val canDirectDownload: Boolean,
 )

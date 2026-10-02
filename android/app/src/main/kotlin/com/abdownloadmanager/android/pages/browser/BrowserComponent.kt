@@ -2,6 +2,7 @@ package com.abdownloadmanager.android.pages.browser
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.runtime.Stable
 import com.abdownloadmanager.android.pages.add.multiple.AddMultiDownloadActivity
@@ -13,6 +14,8 @@ import com.abdownloadmanager.android.ui.widget.WebContent
 import com.abdownloadmanager.android.ui.widget.WebViewState
 import com.abdownloadmanager.resources.Res
 import com.abdownloadmanager.shared.pages.adddownload.AddDownloadConfig
+import com.abdownloadmanager.shared.pages.adddownload.ImportOptions
+import com.abdownloadmanager.shared.pages.adddownload.SilentImportOptions
 import com.abdownloadmanager.shared.util.BaseComponent
 import com.abdownloadmanager.shared.util.ClipboardUtil
 import com.abdownloadmanager.shared.util.mvi.ContainsEffects
@@ -53,7 +56,14 @@ class BrowserComponent(
                 0 -> null
                 1 -> AddSingleDownloadActivity.createIntent(
                     context,
-                    AddDownloadConfig.SingleAddConfig(it.first()),
+                    AddDownloadConfig.SingleAddConfig(
+                        newDownload = it.first(),
+                        importOptions = ImportOptions(
+                            silentImport = SilentImportOptions(
+                                silentDownload = true,
+                            ),
+                        ),
+                    ),
                     json,
                 )
 
@@ -90,7 +100,7 @@ class BrowserComponent(
                 separator()
                 +createShowBookmarksAction()
                 if (url != null) {
-                    if (url.startsWith("http://") || url.startsWith("https://")) {
+                    if (isPageMediaActionsEligible(url)) {
                         separator()
                         +createDownloadPageVideoAction(url)
                         +createDownloadPageVideoSpanishCaptionsAction(url)
@@ -160,6 +170,7 @@ class BrowserComponent(
 
     fun closeTab(tabId: ABDMBrowserTabId) {
         mediaCatcher.clearTab(tabId)
+        ShortLinkTrace.unregisterTab(tabId)
         tabs.update {
             val newItems = it.tabs.filterNot { it.tabId == tabId }
             it.copy(
@@ -529,6 +540,28 @@ class BrowserComponent(
             val text: String,
         ) : Effects
     }
+}
+
+private fun isPageMediaActionsEligible(url: String): Boolean {
+    if (!url.startsWith("http://", ignoreCase = true) &&
+        !url.startsWith("https://", ignoreCase = true)
+    ) {
+        return false
+    }
+
+    val path = runCatching { Uri.parse(url).path.orEmpty() }.getOrDefault("")
+    val extension = path
+        .substringAfterLast('/', missingDelimiterValue = path)
+        .substringAfterLast('.', missingDelimiterValue = "")
+        .lowercase()
+
+    // Do not offer yt-dlp page actions for ordinary downloadable files.
+    // Direct files are handled automatically by the browser download flow.
+    return extension !in setOf(
+        "apk", "apks", "xapk", "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz",
+        "pdf", "txt", "csv", "json", "xml", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+        "exe", "msi", "dmg", "iso", "deb", "rpm", "jar", "aab",
+    )
 }
 
 typealias ABDMBrowserTabId = String

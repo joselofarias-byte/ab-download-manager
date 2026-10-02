@@ -141,7 +141,7 @@ fun Footer(
                 .filter { it.isWebPage }
                 .map { it.link }
                 .distinct()
-            val hasDirectSelection = selectedItems.any { !it.isWebPage }
+            val hasDirectSelection = selectedItems.any { it.canDirectDownload }
             val showMoreOptions by component.showMoreOptions.collectAsState()
             RenderControlSelections(
                 onRequestSelectAll = { component.selectAll(true) },

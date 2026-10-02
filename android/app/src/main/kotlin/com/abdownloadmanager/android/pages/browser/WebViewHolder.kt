@@ -4,7 +4,12 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Message
+import android.util.Log
+import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
@@ -20,6 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import ir.amirab.util.compose.asStringSource
 import kotlinx.coroutines.launch
 import java.util.UUID
+
+private const val TAG = "ABDM_SHORTLINK"
 
 class WebViewRegistry(
     private val scope: CoroutineScope,
@@ -49,6 +56,7 @@ class WebViewRegistry(
                     requestInterceptor = browserComponent.downloadInterceptor,
                     mediaCatcher = browserComponent.mediaCatcher,
                     scope = scope,
+                    closeTab = browserComponent::closeTab,
                 ),
                 chromeClient = ABDMChromeClient(browserComponent, ::getWebViewHolder),
                 webViewFactory = this,
@@ -78,7 +86,41 @@ class WebViewRegistry(
             webView.settings.setSupportZoom(true)
             webView.settings.builtInZoomControls = false
             webView.settings.setSupportMultipleWindows(true)
+            webView.settings.javaScriptCanOpenWindowsAutomatically = true
             webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            webView.addJavascriptInterface(
+                ShortLinkJavascriptBridge(),
+                "ABDMShortLink",
+            )
+
+            // --- ShortXLinks WebView-detection bypass ---
+            // The default Android WebView User-Agent contains "; wv)" and
+            // "Version/4.0" markers.  Link shorteners (e.g. ShortXLinks /
+            // AdLinkFly) check navigator.userAgent for these and display
+            // "Redirecting to Chrome" instead of continuing the redirect
+            // chain.  Stripping the markers makes the WebView appear as
+            // standard Chrome Mobile, which is what Quetta/Chrome present.
+            val defaultUA = webView.settings.userAgentString
+            val normalizedUA = normalizeWebViewUserAgent(defaultUA)
+            if (normalizedUA != defaultUA) {
+                webView.settings.userAgentString = normalizedUA
+                Log.d(TAG, "UA normalized: $normalizedUA")
+                ShortLinkTrace.record("UA normalized: $normalizedUA")
+            } else {
+                Log.d(TAG, "UA unchanged: $defaultUA")
+                ShortLinkTrace.record("UA unchanged: $defaultUA")
+            }
+
+            // Cross-domain redirect chains (shortxlinks.in → .com →
+            // destination) need third-party cookies.  On Android Lollipop+
+            // the default is false.
+            CookieManager.getInstance().let { cm ->
+                cm.setAcceptCookie(true)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    cm.setAcceptThirdPartyCookies(webView, true)
+                }
+            }
+
             webView.isLongClickable = true
             webView.setOnLongClickListener {
                 val hit = webView.hitTestResult
@@ -102,6 +144,8 @@ class WebViewRegistry(
                     if (url == null) {
                         return@launch
                     }
+                    Log.d(TAG, "onDownloadStart url=$url mime=$mimeType disp=$contentDisposition")
+                    ShortLinkTrace.record("onDownloadStart url=$url mime=$mimeType disp=$contentDisposition")
 
                     val isHtmlInterstitial =
                         mimeType?.startsWith("text/html", ignoreCase = true) == true ||
@@ -179,6 +223,9 @@ class WebViewRegistry(
                     if (!webView.canGoBack() && webView.originalUrl == null) {
                         browserComponent.closeTab(tab.tabId)
                     }
+                    if (ShortLinkTrace.isTabActive(tab.tabId)) {
+                        ShortLinkTrace.record("direct-download url=$url")
+                    }
                     browserComponent.downloadInterceptor.onDownloadStart(
                         url,
                         userAgent,
@@ -236,12 +283,21 @@ class ABDMWebViewClient(
     private val requestInterceptor: DownloadInterceptor,
     private val mediaCatcher: MediaCatcher,
     private val scope: CoroutineScope,
+    private val closeTab: (String) -> Unit,
 ) : AccompanistWebViewClient() {
     override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
         if (request != null) {
             scope.launch(Dispatchers.Main) {
                 val pageUrl = view?.url ?: view?.originalUrl
                 val headers = request.requestHeaders.toMutableMap()
+
+                // Strip the X-Requested-With header that WebView adds
+                // automatically (containing the app package name).  Link
+                // shorteners use it as a secondary WebView detector.
+                headers.keys.firstOrNull {
+                    it.equals("X-Requested-With", ignoreCase = true)
+                }?.let { headers.remove(it) }
+
                 if (headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
                     view?.settings?.userAgentString
                         ?.takeIf { it.isNotBlank() }
@@ -276,10 +332,54 @@ class ABDMWebViewClient(
         favicon: Bitmap?,
     ) {
         super.onPageStarted(view, url, favicon)
+        Log.d(TAG, "onPageStarted url=$url")
+        ShortLinkTrace.record("onPageStarted url=$url")
+        logCookiePresence(url)
         if (url != null) {
             (view as? ABDMWebView)?.tabId?.let { tabId ->
                 mediaCatcher.onPageNavigation(tabId, url)
             }
+        }
+    }
+
+    override fun onPageFinished(view: WebView, url: String?) {
+        super.onPageFinished(view, url)
+        Log.d(TAG, "onPageFinished url=$url title=${view.title}")
+        ShortLinkTrace.record("onPageFinished url=$url title=${view.title}")
+
+        val tabId = (view as? ABDMWebView)?.tabId
+        if (ShortLinkTrace.isTabActive(tabId) && url != null) {
+            injectShortLinkAutomation(view, url)
+        }
+    }
+
+    override fun onReceivedError(
+        view: WebView,
+        request: WebResourceRequest?,
+        error: WebResourceError?,
+    ) {
+        super.onReceivedError(view, request, error)
+        if (request?.isForMainFrame == true) {
+            val message = "onReceivedError url=${request.url}" +
+                " code=${error?.errorCode}" +
+                " desc=${error?.description}"
+            Log.w(TAG, message)
+            ShortLinkTrace.record(message)
+        }
+    }
+
+    override fun onReceivedHttpError(
+        view: WebView,
+        request: WebResourceRequest?,
+        errorResponse: WebResourceResponse?,
+    ) {
+        super.onReceivedHttpError(view, request, errorResponse)
+        if (request?.isForMainFrame == true) {
+            val message = "onReceivedHttpError url=${request.url}" +
+                " status=${errorResponse?.statusCode}" +
+                " reason=${errorResponse?.reasonPhrase}"
+            Log.w(TAG, message)
+            ShortLinkTrace.record(message)
         }
     }
 
@@ -289,9 +389,48 @@ class ABDMWebViewClient(
     ): Boolean {
 
         val url = request.url.toString()
+        val scheme = request.url.scheme.orEmpty()
+        val isMainFrame = request.isForMainFrame
+        val hasGesture = request.hasGesture()
+
+        val navigationMessage = "shouldOverrideUrlLoading" +
+            " url=$url" +
+            " scheme=$scheme" +
+            " mainFrame=$isMainFrame" +
+            " gesture=$hasGesture"
+        Log.d(TAG, navigationMessage)
+        ShortLinkTrace.record(navigationMessage)
+
+        val shortLinkTabId = (view as? ABDMWebView)?.tabId
+        val shortLinkMode = ShortLinkTrace.isTabActive(shortLinkTabId)
+        if (shortLinkMode && isMainFrame && isHttpWebUrl(url)) {
+            val host = request.url.host.orEmpty().lowercase()
+
+            if (isKnownShortLinkAdHost(host)) {
+                Log.d(TAG, "  -> blocked known ad host: $host")
+                ShortLinkTrace.record("blocked ad host=$host url=$url")
+                if (shortLinkTabId != null) {
+                    scope.launch(Dispatchers.Main) {
+                        closeTab(shortLinkTabId)
+                    }
+                }
+                return true
+            }
+
+            extractShortXLinksFastForward(url)
+                ?.takeIf { it != url }
+                ?.let { target ->
+                    Log.d(TAG, "  -> ShortXLinks fast-forward: $target")
+                    ShortLinkTrace.record("fast-forward from=$url to=$target")
+                    view.loadUrl(target)
+                    return true
+                }
+        }
 
         // Let WebView load normal web pages.
         if (isHttpWebUrl(url)) {
+            Log.d(TAG, "  -> allow (http/https)")
+            ShortLinkTrace.record("allow http/https url=$url")
             return false
         }
 
@@ -300,9 +439,14 @@ class ABDMWebViewClient(
         // HTTP(S) destination so the redirect chain remains inside ABDM and
         // keeps the current cookies/session.
         extractHttpWebFallback(url)?.let { webTarget ->
+            Log.d(TAG, "  -> extracted fallback: $webTarget")
+            ShortLinkTrace.record("extracted fallback from=$url to=$webTarget")
             view.loadUrl(webTarget)
             return true
         }
+
+        Log.d(TAG, "  -> external intent")
+        ShortLinkTrace.record("external intent url=$url")
 
         // No usable web fallback was carried by the URI. Only now hand the
         // deep link to an external app as a last resort.
@@ -318,7 +462,8 @@ class ABDMWebViewClient(
                 view.context.startActivity(intent)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Intent launch failed: $url", e)
+            ShortLinkTrace.record("Intent launch failed url=$url error=${e.message}")
         }
 
         return true
@@ -335,19 +480,38 @@ class ABDMChromeClient(
         isUserGesture: Boolean,
         resultMsg: Message?
     ): Boolean {
+        val popupMessage = "onCreateWindow isDialog=$isDialog" +
+            " isUserGesture=$isUserGesture" +
+            " opener=${view?.url}"
+        Log.d(TAG, popupMessage)
+        ShortLinkTrace.record(popupMessage)
         if (view == null) return false
+
+        val openerTabId = (view as? ABDMWebView)?.tabId
+        val shortLinkMode = ShortLinkTrace.isTabActive(openerTabId)
+
         val transport = (resultMsg?.obj as? WebView.WebViewTransport) ?: return false
         val newTab = browserComponent.newTab(
             id = UUID.randomUUID().toString(),
-            switch = true,
+            switch = !shortLinkMode,
             url = null,
-            openedBy = (view as? ABDMWebView)?.tabId
+            openedBy = openerTabId
         )
+        if (shortLinkMode) {
+            ShortLinkTrace.registerTab(newTab.tabId)
+            ShortLinkTrace.record("popup opened hidden tab=${newTab.tabId} opener=${view.url}")
+        }
         val newWebView = createWebViewHolder(newTab).activate(view.context)
         newWebView.openedBy = view.originalUrl ?: view.url
         transport.webView = newWebView
         resultMsg.sendToTarget()
         return true
+    }
+
+    override fun onReceivedTitle(view: WebView, title: String?) {
+        super.onReceivedTitle(view, title)
+        Log.d(TAG, "onReceivedTitle title=$title url=${view.url}")
+        ShortLinkTrace.record("onReceivedTitle title=$title url=${view.url}")
     }
 }
 
@@ -356,4 +520,700 @@ class ABDMWebView(
 ) : WebView(context) {
     var openedBy: String? = null
     var tabId: String? = null
+}
+
+/**
+ * Strips the Android WebView markers from the default User-Agent string.
+ *
+ * The default WebView UA looks like:
+ *   Mozilla/5.0 (Linux; Android 14; … Build/…; **wv**) AppleWebKit/537.36
+ *   (KHTML, like Gecko) **Version/4.0** Chrome/130.0.0.0 Mobile Safari/537.36
+ *
+ * Link shorteners (ShortXLinks / AdLinkFly) test `navigator.userAgent` for
+ * the `; wv)` and `Version/4.0` tokens and display a "Redirecting to Chrome"
+ * interstitial when they detect an embedded WebView.
+ *
+ * This function produces a User-Agent that looks like standard Chrome Mobile:
+ *   Mozilla/5.0 (Linux; Android 14; …) AppleWebKit/537.36 (KHTML, like Gecko)
+ *   Chrome/130.0.0.0 Mobile Safari/537.36
+ */
+internal fun normalizeWebViewUserAgent(ua: String): String {
+    var result = ua
+    // Remove "; wv" (with any surrounding whitespace before the closing paren)
+    result = result.replace(Regex("""\s*;\s*wv\b"""), "")
+    // Remove "Version/4.0 " (legacy WebView identifier)
+    result = result.replace(Regex("""Version/4\.0\s*"""), "")
+    // Collapse any resulting double-spaces
+    result = result.replace("  ", " ")
+    return result.trim()
+}
+
+/**
+ * Logs whether cookies exist for the given URL. Does NOT log values.
+ */
+private class ShortLinkJavascriptBridge {
+    @JavascriptInterface
+    fun log(message: String?) {
+        if (!message.isNullOrBlank()) {
+            ShortLinkTrace.record("js: " + message.take(500))
+        }
+    }
+}
+
+private fun injectShortLinkAutomation(view: WebView, rawUrl: String) {
+    val host = runCatching {
+        Uri.parse(rawUrl).host.orEmpty().lowercase()
+    }.getOrDefault("")
+
+    when {
+        host.matches(Regex("""mtc\d+\..+""")) -> {
+            view.evaluateJavascript(shortLinkMtcAutomationScript(), null)
+        }
+
+        host == "shortxlinks.com" || host.endsWith(".shortxlinks.com") -> {
+            view.evaluateJavascript(shortLinksGoHookScript(), null)
+        }
+
+        host == "devuploads.com" || host.endsWith(".devuploads.com") -> {
+            view.evaluateJavascript(devUploadsAutomationScript(), null)
+        }
+
+        else -> {
+            // Generic resolver for explicit "paste/share URL and download" sessions.
+            // It only clicks conservative, download-oriented controls and pauses
+            // automatically while a human verification widget is visible.
+            view.evaluateJavascript(genericDownloadAutomationScript(), null)
+        }
+    }
+}
+
+private fun genericDownloadAutomationScript(): String = """
+(() => {
+  if (window.__abdmGenericDownloadAutomationInstalled) return;
+  window.__abdmGenericDownloadAutomationInstalled = true;
+
+  const log = (m) => {
+    try { window.ABDMShortLink && window.ABDMShortLink.log(String(m)); } catch (_) {}
+  };
+
+  const visible = (el) => {
+    if (!el || el.disabled) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 2 && rect.height > 2;
+  };
+
+  const labelOf = (el) => String(
+    el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || ''
+  ).replace(/\s+/g, ' ').trim();
+
+  const verificationSolved = () => {
+    try {
+      const tokens = [
+        'textarea[name="g-recaptcha-response"]',
+        'textarea[name="h-captcha-response"]',
+        'input[name="h-captcha-response"]',
+        'input[name="cf-turnstile-response"]',
+        'textarea[name="cf-turnstile-response"]'
+      ];
+      return tokens.some((selector) =>
+        Array.from(document.querySelectorAll(selector))
+          .some((el) => String(el.value || el.textContent || '').trim().length > 8)
+      );
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const hasHumanVerification = () => {
+    try {
+      if (verificationSolved()) return false;
+      const bodyText = String(document.body?.innerText || '').toLowerCase();
+      const verified = /\bverified\b|\bverificado\b|verification complete|verificaci[oó]n completada/.test(bodyText);
+      if (verified) return false;
+      const selectors = [
+        '.g-recaptcha',
+        'iframe[src*="recaptcha"]',
+        'iframe[src*="hcaptcha"]',
+        'iframe[src*="turnstile"]',
+        '[data-sitekey]',
+        'input[name*="captcha" i]'
+      ];
+      return selectors.some((selector) =>
+        Array.from(document.querySelectorAll(selector)).some(visible)
+      );
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const fileLike = (href) => {
+    try {
+      const u = new URL(href, location.href);
+      const p = String(u.pathname || '').toLowerCase();
+      return /\.(apk|apks|xapk|aab|zip|rar|7z|tar|gz|tgz|bz2|xz|pdf|docx?|xlsx?|pptx?|csv|json|xml|iso|img|deb|rpm|exe|msi|dmg|jar|mp4|m4v|webm|mkv|mov|avi|3gp|mp3|m4a|aac|ogg|opus|wav|flac)(?:$|[?#])/.test(p + u.search + u.hash);
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const positiveScore = (el) => {
+    const label = labelOf(el).toLowerCase();
+    const href = String(el.href || el.getAttribute('href') || '');
+
+    if (/premium|fast\s*download|high\s*speed|sponsor|advert|anuncio|ads?\b|install\s+app|open\s+app|subscribe|buy\b|donate|login|sign\s*in/.test(label)) {
+      return -100;
+    }
+
+    let score = 0;
+
+    if (/^(free\s*download|download\s*free|descarga\s*gratis|descargar\s*gratis|liberta\s+descarga)$/.test(label)) score += 100;
+    if (/^(direct\s*download|download\s*file|descargar\s*archivo)$/.test(label)) score += 95;
+    if (/^(get\s*link|obtener\s+v[ií]nculo|generate\s*link|create\s*download\s*link)$/.test(label)) score += 90;
+    if (/^(continue|continuar|proceed|next|siguiente)$/.test(label)) score += 75;
+    if (/^(download|descargar)$/.test(label)) score += 55;
+
+    if (fileLike(href)) score += 80;
+    if (el.hasAttribute && el.hasAttribute('download')) score += 70;
+
+    return score;
+  };
+
+  let clicks = 0;
+  let lastClickedSignature = '';
+  let unchanged = 0;
+  let waitingForVerification = false;
+
+  const timer = setInterval(() => {
+    if (!document.body) return;
+
+    if (hasHumanVerification()) {
+      if (!waitingForVerification) {
+        waitingForVerification = true;
+        log('generic resolver paused for human verification; it will resume automatically');
+      }
+      return;
+    }
+
+    if (waitingForVerification) {
+      waitingForVerification = false;
+      unchanged = 0;
+      log('generic resolver verification completed; resuming automatically');
+    }
+
+    const controls = Array.from(document.querySelectorAll(
+      'a, button, input[type="submit"], input[type="button"], [role="button"], [onclick]'
+    )).filter(visible);
+
+    const ranked = controls
+      .map((el) => ({ el, score: positiveScore(el), label: labelOf(el) }))
+      .filter((x) => x.score >= 70)
+      .sort((a, b) => b.score - a.score);
+
+    if (ranked.length === 0) {
+      unchanged++;
+      if (unchanged >= 240) {
+        clearInterval(timer);
+        log('generic resolver stopped after 120s without an actionable control');
+      }
+      return;
+    }
+
+    const best = ranked[0];
+    const second = ranked[1];
+
+    // If two unrelated controls are equally plausible, do not guess.
+    if (second && second.score === best.score && second.label !== best.label) {
+      if (unchanged % 20 === 0) {
+        log('generic resolver found ambiguous controls: ' + best.label + ' | ' + second.label);
+      }
+      unchanged++;
+      return;
+    }
+
+    const href = String(best.el.href || best.el.getAttribute('href') || '');
+    const signature = best.label + '|' + href;
+
+    if (signature === lastClickedSignature) {
+      unchanged++;
+      return;
+    }
+
+    if (clicks >= 8) {
+      clearInterval(timer);
+      log('generic resolver click limit reached');
+      return;
+    }
+
+    clicks++;
+    unchanged = 0;
+    lastClickedSignature = signature;
+
+    log('generic resolver click #' + clicks + ': ' + best.label + ' score=' + best.score);
+
+    try {
+      best.el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    } catch (_) {}
+
+    setTimeout(() => {
+      try {
+        best.el.click();
+      } catch (_) {}
+    }, 120);
+  }, 500);
+
+  log('generic download automation ready');
+})();
+""".trimIndent()
+
+private fun shortLinkMtcAutomationScript(): String = """
+(() => {
+  if (window.__abdmMtcAutomationInstalled) return;
+  window.__abdmMtcAutomationInstalled = true;
+
+  const log = (m) => {
+    try { window.ABDMShortLink && window.ABDMShortLink.log(String(m)); } catch (_) {}
+  };
+
+  const decode = (s) => {
+    try { return JSON.parse(atob(s)); } catch (_) { return null; }
+  };
+
+  const overlay = (() => {
+    const root = document.createElement('div');
+    root.id = 'abdm-shortlink-progress';
+    root.style.cssText = [
+      'position:fixed','inset:0','z-index:2147483647',
+      'background:#111','color:#fff','display:flex',
+      'align-items:center','justify-content:center',
+      'font-family:sans-serif','text-align:center','padding:24px'
+    ].join(';');
+    const box = document.createElement('div');
+    box.style.cssText = 'max-width:420px;font-size:18px;line-height:1.45';
+    box.innerHTML = '<b>ABDM está preparando el enlace</b><div id="abdm-countdown" style="margin-top:12px;font-size:28px"></div><div style="margin-top:10px;font-size:13px;opacity:.7">Esperando el tiempo requerido por ShortXLinks…</div>';
+    root.appendChild(box);
+    return root;
+  })();
+
+  const showOverlay = (seconds) => {
+    if (!document.body) return;
+    if (!document.getElementById('abdm-shortlink-progress')) {
+      document.body.appendChild(overlay);
+    }
+    const label = document.getElementById('abdm-countdown');
+    if (label) label.textContent = Math.max(0, seconds) + ' s';
+  };
+
+  const redirectSafelinkParam = () => {
+    try {
+      const encoded = new URL(location.href).searchParams.get('safelink_redirect');
+      if (!encoded) return false;
+      const decoded = decode(encoded);
+      if (decoded && /^https?:\/\//i.test(decoded.safelink || '')) {
+        log('completed safelink wrapper -> ' + decoded.safelink);
+        location.replace(decoded.safelink);
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  };
+
+  if (redirectSafelinkParam()) return;
+
+  let tries = 0;
+  const probe = setInterval(() => {
+    tries++;
+    const node = document.getElementById('value') ||
+      document.querySelector('input[name="newwpsafelink"]');
+    const encoded = (node && node.value) || window.ad_mem;
+
+    if (!encoded) {
+      if (tries >= 80) {
+        clearInterval(probe);
+        log('mtc payload not found after 40s');
+      }
+      return;
+    }
+
+    const data = decode(encoded);
+    if (!data || !data.linkr) return;
+
+    clearInterval(probe);
+
+    let target = String(data.linkr);
+    try {
+      const inner = new URL(target).searchParams.get('safelink_redirect');
+      const decodedInner = inner && decode(inner);
+      if (decodedInner && /^https?:\/\//i.test(decodedInner.safelink || '')) {
+        target = decodedInner.safelink;
+      }
+    } catch (_) {}
+
+    let seconds = Number.parseInt(data.delay, 10);
+    if (!Number.isFinite(seconds)) seconds = 25;
+    seconds = Math.max(0, seconds) + 2;
+
+    log('mtc wait=' + seconds + 's target=' + target);
+    showOverlay(seconds);
+
+    const timer = setInterval(() => {
+      seconds--;
+      showOverlay(seconds);
+      if (seconds < 0) {
+        clearInterval(timer);
+        log('mtc wait complete -> ' + target);
+        location.href = target;
+      }
+    }, 1000);
+  }, 500);
+})();
+""".trimIndent()
+
+private fun shortLinksGoHookScript(): String = """
+(() => {
+  if (window.__abdmShortLinksHookInstalled) return;
+  window.__abdmShortLinksHookInstalled = true;
+
+  const log = (m) => {
+    try { window.ABDMShortLink && window.ABDMShortLink.log(String(m)); } catch (_) {}
+  };
+
+  const maybeFollow = (url, text) => {
+    if (!String(url || '').includes('/links/go')) return;
+    try {
+      const data = JSON.parse(text);
+      if (data && /^https?:\/\//i.test(data.url || '')) {
+        log('/links/go -> ' + data.url);
+        location.href = data.url;
+      }
+    } catch (_) {}
+  };
+
+  try {
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+
+    XMLHttpRequest.prototype.open = function(method, url) {
+      this.__abdmRequestUrl = String(url || '');
+      return originalOpen.apply(this, arguments);
+    };
+
+    XMLHttpRequest.prototype.send = function() {
+      if (String(this.__abdmRequestUrl || '').includes('/links/go')) {
+        this.addEventListener('load', () => {
+          maybeFollow(this.__abdmRequestUrl, this.responseText || '');
+        }, { once: true });
+      }
+      return originalSend.apply(this, arguments);
+    };
+  } catch (_) {}
+
+  try {
+    const originalFetch = window.fetch;
+    window.fetch = async function() {
+      const response = await originalFetch.apply(this, arguments);
+      try {
+        const requestUrl = typeof arguments[0] === 'string'
+          ? arguments[0]
+          : (arguments[0] && arguments[0].url) || '';
+        if (String(requestUrl).includes('/links/go')) {
+          const clone = response.clone();
+          maybeFollow(requestUrl, await clone.text());
+        }
+      } catch (_) {}
+      return response;
+    };
+  } catch (_) {}
+
+  const isVisible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 1 && rect.height > 1;
+  };
+
+  const verificationSolved = () => {
+    try {
+      const tokens = [
+        'textarea[name="g-recaptcha-response"]',
+        'textarea[name="h-captcha-response"]',
+        'input[name="h-captcha-response"]',
+        'input[name="cf-turnstile-response"]',
+        'textarea[name="cf-turnstile-response"]'
+      ];
+      return tokens.some((selector) =>
+        Array.from(document.querySelectorAll(selector))
+          .some((el) => String(el.value || el.textContent || '').trim().length > 8)
+      );
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const hasHumanVerification = () => {
+    try {
+      if (verificationSolved()) return false;
+      const bodyText = String(document.body?.innerText || '').toLowerCase();
+      if (/\bverified\b|\bverificado\b|verification complete|verificaci[oó]n completada/.test(bodyText)) return false;
+
+      const selectors = [
+        '.g-recaptcha',
+        'iframe[src*="recaptcha"]',
+        'iframe[src*="hcaptcha"]',
+        'iframe[src*="turnstile"]',
+        '[data-sitekey]'
+      ];
+      return selectors.some((selector) =>
+        Array.from(document.querySelectorAll(selector)).some(isVisible)
+      );
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const isVisibleButton = (el) => {
+    if (!el || el.disabled) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 1 && rect.height > 1;
+  };
+
+  const getLabel = (el) => String(
+    el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || ''
+  ).replace(/\s+/g, ' ').trim();
+
+  let clickChecks = 0;
+  let waitingForVerification = false;
+  const clickTimer = setInterval(() => {
+    if (hasHumanVerification()) {
+      if (!waitingForVerification) {
+        waitingForVerification = true;
+        log('human verification detected; waiting for user and preserving the session');
+      }
+      return;
+    }
+
+    if (waitingForVerification) {
+      waitingForVerification = false;
+      clickChecks = 0;
+      log('human verification completed; resuming ShortXLinks automatically');
+    }
+
+    clickChecks++;
+
+    const candidates = Array.from(document.querySelectorAll(
+      'a.get-link, #btn-get-link, #get-link-btn, button#go-submit, button, a.btn, input[type="submit"]'
+    ));
+
+    const button = candidates.find((el) => {
+      if (!isVisibleButton(el)) return false;
+      const label = getLabel(el);
+      return /^(obtener\s+v[ií]nculo|get\s*link|continuar|continue)$/i.test(label);
+    });
+
+    if (button) {
+      clearInterval(clickTimer);
+      log('auto-click ShortXLinks button: ' + getLabel(button));
+      button.click();
+      return;
+    }
+
+    if (clickChecks >= 120) {
+      clearInterval(clickTimer);
+      log('ShortXLinks button not found after 90s');
+    }
+  }, 750);
+
+  log('ShortXLinks /links/go hook ready');
+})();
+""".trimIndent()
+
+private fun devUploadsAutomationScript(): String = """
+(() => {
+  if (window.__abdmDevUploadsAutomationInstalled) return;
+  window.__abdmDevUploadsAutomationInstalled = true;
+
+  const log = (m) => {
+    try { window.ABDMShortLink && window.ABDMShortLink.log(String(m)); } catch (_) {}
+  };
+
+  const isVisible = (el) => {
+    if (!el || el.disabled) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 1 && rect.height > 1;
+  };
+
+  const verificationSolved = () => {
+    try {
+      const tokens = [
+        'textarea[name="g-recaptcha-response"]',
+        'textarea[name="h-captcha-response"]',
+        'input[name="h-captcha-response"]',
+        'input[name="cf-turnstile-response"]',
+        'textarea[name="cf-turnstile-response"]'
+      ];
+      return tokens.some((selector) =>
+        Array.from(document.querySelectorAll(selector))
+          .some((el) => String(el.value || el.textContent || '').trim().length > 8)
+      );
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const hasHumanVerification = () => {
+    try {
+      if (verificationSolved()) return false;
+      const bodyText = String(document.body?.innerText || '').toLowerCase();
+
+      // DevUploads keeps challenge-related markup in the DOM even after the
+      // user/session has already been verified. Do not treat stale/hidden
+      // captcha nodes as an active challenge.
+      if (/\bverified\b|\bverificado\b|verification complete|verificaci[oó]n completada/.test(bodyText)) return false;
+
+      const selectors = [
+        '.g-recaptcha',
+        'iframe[src*="recaptcha"]',
+        'iframe[src*="hcaptcha"]',
+        'iframe[src*="turnstile"]',
+        '[data-sitekey]'
+      ];
+      return selectors.some((selector) =>
+        Array.from(document.querySelectorAll(selector)).some(isVisible)
+      );
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const labelOf = (el) => String(
+    el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || ''
+  ).replace(/\s+/g, ' ').trim();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'abdm-devuploads-progress';
+  overlay.style.cssText = [
+    'position:fixed','inset:0','z-index:2147483647',
+    'background:#111','color:#fff','display:flex',
+    'align-items:center','justify-content:center',
+    'font-family:sans-serif','text-align:center','padding:24px'
+  ].join(';');
+  overlay.innerHTML = '<div style="max-width:420px;font-size:18px;line-height:1.45"><b>ABDM está preparando la descarga</b><div style="margin-top:10px;font-size:13px;opacity:.7">Esperando el botón gratuito de DevUploads…</div></div>';
+
+  if (document.body && !hasHumanVerification()) {
+    document.body.appendChild(overlay);
+  }
+
+  let checks = 0;
+  let verifiedLogged = false;
+  let waitingForVerification = false;
+  const timer = setInterval(() => {
+    const bodyText = String(document.body?.innerText || '').toLowerCase();
+    if (!verifiedLogged && /\bverified\b|\bverificado\b|verification complete|verificaci[oó]n completada/.test(bodyText)) {
+      verifiedLogged = true;
+      log('DevUploads verified state observed; continuing automation');
+    }
+
+    if (hasHumanVerification()) {
+      overlay.remove();
+      if (!waitingForVerification) {
+        waitingForVerification = true;
+        log('DevUploads human verification detected; waiting for user and preserving the session');
+      }
+      return;
+    }
+
+    if (waitingForVerification) {
+      waitingForVerification = false;
+      checks = 0;
+      log('DevUploads human verification completed; resuming automatically');
+      if (document.body && !document.getElementById('abdm-devuploads-progress')) {
+        document.body.appendChild(overlay);
+      }
+    }
+
+    checks++;
+
+    const candidates = Array.from(document.querySelectorAll(
+      'button, a, input[type="submit"], input[type="button"], [role="button"], .btn, [onclick]'
+    ));
+
+    const freeButton = candidates.find((el) => {
+      if (!isVisible(el)) return false;
+      const label = labelOf(el);
+      if (/premium|prima|sponsor|advert|anuncio|ads?/i.test(label)) return false;
+      return /(free\s*download|liberta\s+descarga|descarga\s+gratis|download\s+free|continue|continuar)/i.test(label);
+    });
+
+    if (freeButton) {
+      const label = labelOf(freeButton);
+      const disabledByAttribute =
+        freeButton.disabled === true ||
+        freeButton.getAttribute('aria-disabled') === 'true' ||
+        freeButton.classList.contains('disabled');
+
+      if (disabledByAttribute) {
+        if (checks % 10 === 0) {
+          log('DevUploads free button visible but still disabled: ' + label);
+        }
+      } else {
+        clearInterval(timer);
+        log('auto-click DevUploads button: ' + label);
+        overlay.remove();
+
+        const clickable =
+          freeButton.closest('button, a, [role="button"], .btn, [onclick]') ||
+          freeButton;
+        clickable.click();
+        return;
+      }
+    } else if (checks % 20 === 0) {
+      const labels = candidates
+        .filter(isVisible)
+        .map(labelOf)
+        .filter(Boolean)
+        .filter((label) => label.length <= 80)
+        .slice(0, 12);
+      log('DevUploads visible controls: ' + labels.join(' | '));
+    }
+
+    if (checks >= 240) {
+      clearInterval(timer);
+      overlay.remove();
+      log('DevUploads free/continue button not actionable after 120s');
+    }
+  }, 500);
+
+  log('DevUploads automation ready');
+})();
+""".trimIndent()
+
+private fun isKnownShortLinkAdHost(host: String): Boolean {
+    if (host.isBlank()) return false
+    return host == "ndcertainlywhen.com" ||
+        host.endsWith(".ndcertainlywhen.com") ||
+        host == "smartfeecalculator.com" ||
+        host.endsWith(".smartfeecalculator.com") ||
+        host == "control.kochava.com" ||
+        host.endsWith(".kochava.com") ||
+        host.endsWith(".x9m.workers.dev")
+}
+
+private fun logCookiePresence(url: String?) {
+    if (url == null) return
+    try {
+        val cookie = CookieManager.getInstance().getCookie(url)
+        val present = !cookie.isNullOrBlank()
+        val count = if (present) cookie!!.split(";").size else 0
+        Log.d(TAG, "cookies for $url present=$present count=$count")
+        ShortLinkTrace.record("cookies for $url present=$present count=$count")
+    } catch (e: Exception) {
+        Log.d(TAG, "cookies for $url error=${e.message}")
+        ShortLinkTrace.record("cookies for $url error=${e.message}")
+    }
 }

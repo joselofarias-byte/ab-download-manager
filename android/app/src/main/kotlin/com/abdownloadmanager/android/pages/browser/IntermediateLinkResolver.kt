@@ -2,12 +2,14 @@ package com.abdownloadmanager.android.pages.browser
 
 import android.content.Intent
 import android.net.Uri
+import android.util.Base64
 import android.webkit.CookieManager
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
+import org.json.JSONObject
 
 /**
  * Resolves responses that Android WebView reports as downloads even though they
@@ -270,6 +272,13 @@ fun extractHttpWebFallback(rawUrl: String): String? {
         uri.getQueryParameter("url")
             ?.takeIf(::isHttpWebUrl)
             ?.let { return it }
+
+        // googlechrome://https://example.com — the real URL is the
+        // scheme-specific part (everything after "googlechrome://").
+        val ssp = uri.schemeSpecificPart?.removePrefix("//")
+        if (ssp != null && isHttpWebUrl(ssp)) {
+            return ssp
+        }
     }
 
     for (key in WEB_TARGET_QUERY_KEYS) {
@@ -279,6 +288,48 @@ fun extractHttpWebFallback(rawUrl: String): String? {
     }
 
     return null
+}
+
+/**
+ * Fast-forwards ShortXLinks' own safelink wrapper when the target token is
+ * already present in the URL. This is only called for explicitly tagged
+ * ShortXLinks test tabs.
+ *
+ * Examples seen on-device:
+ *   ?adlinkfly=TfmfX?<token>
+ *   ?safelink_redirect=<base64 JSON containing "safelink">
+ */
+fun extractShortXLinksFastForward(rawUrl: String): String? {
+    val uri = runCatching { Uri.parse(rawUrl) }.getOrNull() ?: return null
+
+    // IMPORTANT: do not reconstruct ?adlinkfly=... directly. ShortXLinks
+    // validates the server-side wait/session state and answers "Too Early"
+    // when the token is consumed before the wrapper timer has matured.
+    // We only unwrap safelink_redirect here because that value already
+    // represents a completed wrapper step.
+    val encoded = uri.getQueryParameter("safelink_redirect")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: return null
+
+    val decoded = runCatching {
+        String(Base64.decode(encoded, Base64.DEFAULT), Charsets.UTF_8)
+    }.getOrNull() ?: return null
+
+    val target = runCatching {
+        JSONObject(decoded).optString("safelink")
+    }.getOrNull()
+        ?.trim()
+        ?.takeIf(::isHttpWebUrl)
+        ?: return null
+
+    val host = runCatching { Uri.parse(target).host.orEmpty().lowercase() }
+        .getOrDefault("")
+    if (host != "shortxlinks.com" && !host.endsWith(".shortxlinks.com")) {
+        return null
+    }
+
+    return target
 }
 
 private val WEB_TARGET_QUERY_KEYS = listOf(

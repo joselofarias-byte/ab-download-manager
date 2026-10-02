@@ -64,7 +64,6 @@ import com.arkivanov.decompose.router.slot.dismiss
 import ir.amirab.SelectionUtil
 import ir.amirab.downloader.db.QueueModel
 import ir.amirab.downloader.downloaditem.DownloadJobStatus
-import ir.amirab.downloader.downloaditem.http.HttpDownloadCredentials
 import ir.amirab.downloader.monitor.CompletedDownloadItemState
 import ir.amirab.downloader.monitor.IDownloadItemState
 import ir.amirab.downloader.monitor.ProcessingDownloadItemState
@@ -82,6 +81,34 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.collections.plus
+
+private data class DebugMediaTestLink(
+    val label: String,
+    val url: String,
+)
+
+private val DEBUG_MEDIA_TEST_LINKS = listOf(
+    DebugMediaTestLink(
+        label = "Threads · Instagram oficial",
+        url = "https://www.threads.com/@instagram",
+    ),
+    DebugMediaTestLink(
+        label = "Facebook · video público",
+        url = "https://www.facebook.com/radiokicksfm/videos/3676516585958356/",
+    ),
+    DebugMediaTestLink(
+        label = "Instagram · Reel oficial",
+        url = "https://www.instagram.com/reel/Chunk8-jurw/",
+    ),
+    DebugMediaTestLink(
+        label = "YouTube · Big Buck Bunny",
+        url = "https://www.youtube.com/watch?v=YE7VzlLtp-4",
+    ),
+    DebugMediaTestLink(
+        label = "Web · Blender Video",
+        url = "https://video.blender.org/videos/watch/bf1f3fb5-b119-4f9f-9930-8e20e892b898",
+    ),
+)
 
 class HomeComponent(
     componentContext: ComponentContext,
@@ -387,16 +414,34 @@ class HomeComponent(
                 title = Res.string.shortxlinks_test_pair.asStringSource(),
                 icon = MyIcons.earth,
             ) {
-                addDownloadDialogManager.openAddDownloadDialog(
+                browserPageManager.openBrowser(
                     listOf(
                         "https://shortxlinks.in/gl2xqf",
                         "https://shortxlinks.in/TfmfX",
-                    ).map { link ->
-                        AddDownloadCredentialsInUiProps(
-                            HttpDownloadCredentials(link = link)
-                        )
-                    }
+                    )
                 )
+            }
+            subMenu(
+                title = "Pruebas multimedia reales".asStringSource(),
+                icon = MyIcons.earth,
+            ) {
+                DEBUG_MEDIA_TEST_LINKS.forEach { test ->
+                    item(
+                        title = test.label.asStringSource(),
+                        icon = MyIcons.earth,
+                    ) {
+                        browserPageManager.openBrowser(test.url)
+                    }
+                }
+                separator()
+                item(
+                    title = "Abrir todas · 5 pestañas".asStringSource(),
+                    icon = MyIcons.earth,
+                ) {
+                    browserPageManager.openBrowser(
+                        DEBUG_MEDIA_TEST_LINKS.map { it.url }
+                    )
+                }
             }
         }
     }

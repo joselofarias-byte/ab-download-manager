@@ -56,18 +56,22 @@ class BrowserActivity : ABDMActivity() {
             .distinct()
 
         if (extraUrls.isNotEmpty()) {
+            ShortLinkTrace.start(this, extraUrls)
             extraUrls.forEachIndexed { index, url ->
-                component.newTab(
+                val tab = component.newTab(
                     url = url,
                     switch = index == extraUrls.lastIndex,
                 )
+                ShortLinkTrace.registerTab(tab.tabId)
             }
             return
         }
 
         val url = intent.data?.toString()
         if (url != null && HttpUrlUtils.isValidUrl(url)) {
-            component.newTab(url)
+            ShortLinkTrace.start(this, listOf(url))
+            val tab = component.newTab(url)
+            ShortLinkTrace.registerTab(tab.tabId)
         }
     }
 
