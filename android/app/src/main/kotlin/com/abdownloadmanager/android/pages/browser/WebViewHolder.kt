@@ -739,17 +739,35 @@ private fun shortLinksGoHookScript(): String = """
     };
   } catch (_) {}
 
+  const isVisible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 1 && rect.height > 1;
+  };
+
   const hasHumanVerification = () => {
     try {
-      return !!document.querySelector(
-        '.g-recaptcha, [data-sitekey], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], [class*="captcha" i], [id*="captcha" i]'
+      const bodyText = String(document.body?.innerText || '').toLowerCase();
+      if (/\bverified\b|\bverificado\b/.test(bodyText)) return false;
+
+      const selectors = [
+        '.g-recaptcha',
+        'iframe[src*="recaptcha"]',
+        'iframe[src*="hcaptcha"]',
+        'iframe[src*="turnstile"]',
+        '[data-sitekey]'
+      ];
+      return selectors.some((selector) =>
+        Array.from(document.querySelectorAll(selector)).some(isVisible)
       );
     } catch (_) {
       return false;
     }
   };
 
-  const isVisible = (el) => {
+  const isVisibleButton = (el) => {
     if (!el || el.disabled) return false;
     const style = getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
@@ -776,7 +794,7 @@ private fun shortLinksGoHookScript(): String = """
     ));
 
     const button = candidates.find((el) => {
-      if (!isVisible(el)) return false;
+      if (!isVisibleButton(el)) return false;
       const label = getLabel(el);
       return /^(obtener\s+v[ií]nculo|get\s*link|continuar|continue)$/i.test(label);
     });
@@ -807,22 +825,36 @@ private fun devUploadsAutomationScript(): String = """
     try { window.ABDMShortLink && window.ABDMShortLink.log(String(m)); } catch (_) {}
   };
 
-  const hasHumanVerification = () => {
-    try {
-      return !!document.querySelector(
-        '.g-recaptcha, [data-sitekey], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], [class*="captcha" i], [id*="captcha" i]'
-      );
-    } catch (_) {
-      return false;
-    }
-  };
-
   const isVisible = (el) => {
     if (!el || el.disabled) return false;
     const style = getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
     const rect = el.getBoundingClientRect();
     return rect.width > 1 && rect.height > 1;
+  };
+
+  const hasHumanVerification = () => {
+    try {
+      const bodyText = String(document.body?.innerText || '').toLowerCase();
+
+      // DevUploads keeps challenge-related markup in the DOM even after the
+      // user/session has already been verified. Do not treat stale/hidden
+      // captcha nodes as an active challenge.
+      if (/\bverified\b|\bverificado\b/.test(bodyText)) return false;
+
+      const selectors = [
+        '.g-recaptcha',
+        'iframe[src*="recaptcha"]',
+        'iframe[src*="hcaptcha"]',
+        'iframe[src*="turnstile"]',
+        '[data-sitekey]'
+      ];
+      return selectors.some((selector) =>
+        Array.from(document.querySelectorAll(selector)).some(isVisible)
+      );
+    } catch (_) {
+      return false;
+    }
   };
 
   const labelOf = (el) => String(
@@ -844,8 +876,15 @@ private fun devUploadsAutomationScript(): String = """
   }
 
   let checks = 0;
+  let verifiedLogged = false;
   const timer = setInterval(() => {
     checks++;
+
+    const bodyText = String(document.body?.innerText || '').toLowerCase();
+    if (!verifiedLogged && /\bverified\b|\bverificado\b/.test(bodyText)) {
+      verifiedLogged = true;
+      log('DevUploads verified state observed; continuing automation');
+    }
 
     if (hasHumanVerification()) {
       clearInterval(timer);
