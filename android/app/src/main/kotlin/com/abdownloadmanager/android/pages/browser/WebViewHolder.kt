@@ -577,8 +577,167 @@ private fun injectShortLinkAutomation(view: WebView, rawUrl: String) {
         host == "devuploads.com" || host.endsWith(".devuploads.com") -> {
             view.evaluateJavascript(devUploadsAutomationScript(), null)
         }
+
+        else -> {
+            // Generic resolver for explicit "paste/share URL and download" sessions.
+            // It only clicks conservative, download-oriented controls and pauses
+            // automatically while a human verification widget is visible.
+            view.evaluateJavascript(genericDownloadAutomationScript(), null)
+        }
     }
 }
+
+private fun genericDownloadAutomationScript(): String = """
+(() => {
+  if (window.__abdmGenericDownloadAutomationInstalled) return;
+  window.__abdmGenericDownloadAutomationInstalled = true;
+
+  const log = (m) => {
+    try { window.ABDMShortLink && window.ABDMShortLink.log(String(m)); } catch (_) {}
+  };
+
+  const visible = (el) => {
+    if (!el || el.disabled) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 2 && rect.height > 2;
+  };
+
+  const labelOf = (el) => String(
+    el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || ''
+  ).replace(/\s+/g, ' ').trim();
+
+  const hasHumanVerification = () => {
+    try {
+      const bodyText = String(document.body?.innerText || '').toLowerCase();
+      const verified = /\bverified\b|\bverificado\b|verification complete|verificaci[oó]n completada/.test(bodyText);
+      if (verified) return false;
+      const selectors = [
+        '.g-recaptcha',
+        'iframe[src*="recaptcha"]',
+        'iframe[src*="hcaptcha"]',
+        'iframe[src*="turnstile"]',
+        '[data-sitekey]',
+        'input[name*="captcha" i]'
+      ];
+      return selectors.some((selector) =>
+        Array.from(document.querySelectorAll(selector)).some(visible)
+      );
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const fileLike = (href) => {
+    try {
+      const u = new URL(href, location.href);
+      const p = String(u.pathname || '').toLowerCase();
+      return /\.(apk|apks|xapk|aab|zip|rar|7z|tar|gz|tgz|bz2|xz|pdf|docx?|xlsx?|pptx?|csv|json|xml|iso|img|deb|rpm|exe|msi|dmg|jar|mp4|m4v|webm|mkv|mov|avi|3gp|mp3|m4a|aac|ogg|opus|wav|flac)(?:$|[?#])/.test(p + u.search + u.hash);
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const positiveScore = (el) => {
+    const label = labelOf(el).toLowerCase();
+    const href = String(el.href || el.getAttribute('href') || '');
+
+    if (/premium|fast\s*download|high\s*speed|sponsor|advert|anuncio|ads?\b|install\s+app|open\s+app|subscribe|buy\b|donate|login|sign\s*in/.test(label)) {
+      return -100;
+    }
+
+    let score = 0;
+
+    if (/^(free\s*download|download\s*free|descarga\s*gratis|descargar\s*gratis|liberta\s+descarga)$/.test(label)) score += 100;
+    if (/^(direct\s*download|download\s*file|descargar\s*archivo)$/.test(label)) score += 95;
+    if (/^(get\s*link|obtener\s+v[ií]nculo|generate\s*link|create\s*download\s*link)$/.test(label)) score += 90;
+    if (/^(continue|continuar|proceed|next|siguiente)$/.test(label)) score += 75;
+    if (/^(download|descargar)$/.test(label)) score += 55;
+
+    if (fileLike(href)) score += 80;
+    if (el.hasAttribute && el.hasAttribute('download')) score += 70;
+
+    return score;
+  };
+
+  let clicks = 0;
+  let lastClickedSignature = '';
+  let unchanged = 0;
+
+  const timer = setInterval(() => {
+    if (!document.body) return;
+
+    if (hasHumanVerification()) {
+      if (unchanged % 10 === 0) log('generic resolver waiting for human verification');
+      unchanged++;
+      return;
+    }
+
+    const controls = Array.from(document.querySelectorAll(
+      'a, button, input[type="submit"], input[type="button"], [role="button"], [onclick]'
+    )).filter(visible);
+
+    const ranked = controls
+      .map((el) => ({ el, score: positiveScore(el), label: labelOf(el) }))
+      .filter((x) => x.score >= 70)
+      .sort((a, b) => b.score - a.score);
+
+    if (ranked.length === 0) {
+      unchanged++;
+      if (unchanged >= 240) {
+        clearInterval(timer);
+        log('generic resolver stopped after 120s without an actionable control');
+      }
+      return;
+    }
+
+    const best = ranked[0];
+    const second = ranked[1];
+
+    // If two unrelated controls are equally plausible, do not guess.
+    if (second && second.score === best.score && second.label !== best.label) {
+      if (unchanged % 20 === 0) {
+        log('generic resolver found ambiguous controls: ' + best.label + ' | ' + second.label);
+      }
+      unchanged++;
+      return;
+    }
+
+    const href = String(best.el.href || best.el.getAttribute('href') || '');
+    const signature = best.label + '|' + href;
+
+    if (signature === lastClickedSignature) {
+      unchanged++;
+      return;
+    }
+
+    if (clicks >= 8) {
+      clearInterval(timer);
+      log('generic resolver click limit reached');
+      return;
+    }
+
+    clicks++;
+    unchanged = 0;
+    lastClickedSignature = signature;
+
+    log('generic resolver click #' + clicks + ': ' + best.label + ' score=' + best.score);
+
+    try {
+      best.el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    } catch (_) {}
+
+    setTimeout(() => {
+      try {
+        best.el.click();
+      } catch (_) {}
+    }, 120);
+  }, 500);
+
+  log('generic download automation ready');
+})();
+""".trimIndent()
 
 private fun shortLinkMtcAutomationScript(): String = """
 (() => {
