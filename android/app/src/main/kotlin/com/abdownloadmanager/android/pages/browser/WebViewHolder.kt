@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Message
 import android.util.Log
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -87,6 +88,10 @@ class WebViewRegistry(
             webView.settings.setSupportMultipleWindows(true)
             webView.settings.javaScriptCanOpenWindowsAutomatically = true
             webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            webView.addJavascriptInterface(
+                ShortLinkJavascriptBridge(),
+                "ABDMShortLink",
+            )
 
             // --- ShortXLinks WebView-detection bypass ---
             // The default Android WebView User-Agent contains "; wv)" and
@@ -341,6 +346,11 @@ class ABDMWebViewClient(
         super.onPageFinished(view, url)
         Log.d(TAG, "onPageFinished url=$url title=${view.title}")
         ShortLinkTrace.record("onPageFinished url=$url title=${view.title}")
+
+        val tabId = (view as? ABDMWebView)?.tabId
+        if (ShortLinkTrace.isTabActive(tabId) && url != null) {
+            injectShortLinkAutomation(view, url)
+        }
     }
 
     override fun onReceivedError(
@@ -541,6 +551,194 @@ internal fun normalizeWebViewUserAgent(ua: String): String {
 /**
  * Logs whether cookies exist for the given URL. Does NOT log values.
  */
+private class ShortLinkJavascriptBridge {
+    @JavascriptInterface
+    fun log(message: String?) {
+        if (!message.isNullOrBlank()) {
+            ShortLinkTrace.record("js: " + message.take(500))
+        }
+    }
+}
+
+private fun injectShortLinkAutomation(view: WebView, rawUrl: String) {
+    val host = runCatching {
+        Uri.parse(rawUrl).host.orEmpty().lowercase()
+    }.getOrDefault("")
+
+    when {
+        host.matches(Regex("""mtc\d+\..+""")) -> {
+            view.evaluateJavascript(shortLinkMtcAutomationScript(), null)
+        }
+
+        host == "shortxlinks.com" || host.endsWith(".shortxlinks.com") -> {
+            view.evaluateJavascript(shortLinksGoHookScript(), null)
+        }
+    }
+}
+
+private fun shortLinkMtcAutomationScript(): String = """
+(() => {
+  if (window.__abdmMtcAutomationInstalled) return;
+  window.__abdmMtcAutomationInstalled = true;
+
+  const log = (m) => {
+    try { window.ABDMShortLink && window.ABDMShortLink.log(String(m)); } catch (_) {}
+  };
+
+  const decode = (s) => {
+    try { return JSON.parse(atob(s)); } catch (_) { return null; }
+  };
+
+  const overlay = (() => {
+    const root = document.createElement('div');
+    root.id = 'abdm-shortlink-progress';
+    root.style.cssText = [
+      'position:fixed','inset:0','z-index:2147483647',
+      'background:#111','color:#fff','display:flex',
+      'align-items:center','justify-content:center',
+      'font-family:sans-serif','text-align:center','padding:24px'
+    ].join(';');
+    const box = document.createElement('div');
+    box.style.cssText = 'max-width:420px;font-size:18px;line-height:1.45';
+    box.innerHTML = '<b>ABDM está preparando el enlace</b><div id="abdm-countdown" style="margin-top:12px;font-size:28px"></div><div style="margin-top:10px;font-size:13px;opacity:.7">Esperando el tiempo requerido por ShortXLinks…</div>';
+    root.appendChild(box);
+    return root;
+  })();
+
+  const showOverlay = (seconds) => {
+    if (!document.body) return;
+    if (!document.getElementById('abdm-shortlink-progress')) {
+      document.body.appendChild(overlay);
+    }
+    const label = document.getElementById('abdm-countdown');
+    if (label) label.textContent = Math.max(0, seconds) + ' s';
+  };
+
+  const redirectSafelinkParam = () => {
+    try {
+      const encoded = new URL(location.href).searchParams.get('safelink_redirect');
+      if (!encoded) return false;
+      const decoded = decode(encoded);
+      if (decoded && /^https?:\/\//i.test(decoded.safelink || '')) {
+        log('completed safelink wrapper -> ' + decoded.safelink);
+        location.replace(decoded.safelink);
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  };
+
+  if (redirectSafelinkParam()) return;
+
+  let tries = 0;
+  const probe = setInterval(() => {
+    tries++;
+    const node = document.getElementById('value') ||
+      document.querySelector('input[name="newwpsafelink"]');
+    const encoded = (node && node.value) || window.ad_mem;
+
+    if (!encoded) {
+      if (tries >= 80) {
+        clearInterval(probe);
+        log('mtc payload not found after 40s');
+      }
+      return;
+    }
+
+    const data = decode(encoded);
+    if (!data || !data.linkr) return;
+
+    clearInterval(probe);
+
+    let target = String(data.linkr);
+    try {
+      const inner = new URL(target).searchParams.get('safelink_redirect');
+      const decodedInner = inner && decode(inner);
+      if (decodedInner && /^https?:\/\//i.test(decodedInner.safelink || '')) {
+        target = decodedInner.safelink;
+      }
+    } catch (_) {}
+
+    let seconds = Number.parseInt(data.delay, 10);
+    if (!Number.isFinite(seconds)) seconds = 25;
+    seconds = Math.max(0, seconds) + 2;
+
+    log('mtc wait=' + seconds + 's target=' + target);
+    showOverlay(seconds);
+
+    const timer = setInterval(() => {
+      seconds--;
+      showOverlay(seconds);
+      if (seconds < 0) {
+        clearInterval(timer);
+        log('mtc wait complete -> ' + target);
+        location.href = target;
+      }
+    }, 1000);
+  }, 500);
+})();
+""".trimIndent()
+
+private fun shortLinksGoHookScript(): String = """
+(() => {
+  if (window.__abdmShortLinksHookInstalled) return;
+  window.__abdmShortLinksHookInstalled = true;
+
+  const log = (m) => {
+    try { window.ABDMShortLink && window.ABDMShortLink.log(String(m)); } catch (_) {}
+  };
+
+  const maybeFollow = (url, text) => {
+    if (!String(url || '').includes('/links/go')) return;
+    try {
+      const data = JSON.parse(text);
+      if (data && /^https?:\/\//i.test(data.url || '')) {
+        log('/links/go -> ' + data.url);
+        location.href = data.url;
+      }
+    } catch (_) {}
+  };
+
+  try {
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+
+    XMLHttpRequest.prototype.open = function(method, url) {
+      this.__abdmRequestUrl = String(url || '');
+      return originalOpen.apply(this, arguments);
+    };
+
+    XMLHttpRequest.prototype.send = function() {
+      if (String(this.__abdmRequestUrl || '').includes('/links/go')) {
+        this.addEventListener('load', () => {
+          maybeFollow(this.__abdmRequestUrl, this.responseText || '');
+        }, { once: true });
+      }
+      return originalSend.apply(this, arguments);
+    };
+  } catch (_) {}
+
+  try {
+    const originalFetch = window.fetch;
+    window.fetch = async function() {
+      const response = await originalFetch.apply(this, arguments);
+      try {
+        const requestUrl = typeof arguments[0] === 'string'
+          ? arguments[0]
+          : (arguments[0] && arguments[0].url) || '';
+        if (String(requestUrl).includes('/links/go')) {
+          const clone = response.clone();
+          maybeFollow(requestUrl, await clone.text());
+        }
+      } catch (_) {}
+      return response;
+    };
+  } catch (_) {}
+
+  log('ShortXLinks /links/go hook ready');
+})();
+""".trimIndent()
+
 private fun isKnownShortLinkAdHost(host: String): Boolean {
     if (host.isBlank()) return false
     return host == "ndcertainlywhen.com" ||
