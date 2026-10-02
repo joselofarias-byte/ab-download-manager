@@ -4,7 +4,11 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Message
+import android.util.Log
+import android.webkit.CookieManager
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
@@ -20,6 +24,8 @@ import kotlinx.coroutines.Dispatchers
 import ir.amirab.util.compose.asStringSource
 import kotlinx.coroutines.launch
 import java.util.UUID
+
+private const val TAG = "ABDM_SHORTLINK"
 
 class WebViewRegistry(
     private val scope: CoroutineScope,
@@ -78,7 +84,35 @@ class WebViewRegistry(
             webView.settings.setSupportZoom(true)
             webView.settings.builtInZoomControls = false
             webView.settings.setSupportMultipleWindows(true)
+            webView.settings.javaScriptCanOpenWindowsAutomatically = true
             webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+
+            // --- ShortXLinks WebView-detection bypass ---
+            // The default Android WebView User-Agent contains "; wv)" and
+            // "Version/4.0" markers.  Link shorteners (e.g. ShortXLinks /
+            // AdLinkFly) check navigator.userAgent for these and display
+            // "Redirecting to Chrome" instead of continuing the redirect
+            // chain.  Stripping the markers makes the WebView appear as
+            // standard Chrome Mobile, which is what Quetta/Chrome present.
+            val defaultUA = webView.settings.userAgentString
+            val normalizedUA = normalizeWebViewUserAgent(defaultUA)
+            if (normalizedUA != defaultUA) {
+                webView.settings.userAgentString = normalizedUA
+                Log.d(TAG, "UA normalized: $normalizedUA")
+            } else {
+                Log.d(TAG, "UA unchanged: $defaultUA")
+            }
+
+            // Cross-domain redirect chains (shortxlinks.in → .com →
+            // destination) need third-party cookies.  On Android Lollipop+
+            // the default is false.
+            CookieManager.getInstance().let { cm ->
+                cm.setAcceptCookie(true)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    cm.setAcceptThirdPartyCookies(webView, true)
+                }
+            }
+
             webView.isLongClickable = true
             webView.setOnLongClickListener {
                 val hit = webView.hitTestResult
@@ -102,6 +136,7 @@ class WebViewRegistry(
                     if (url == null) {
                         return@launch
                     }
+                    Log.d(TAG, "onDownloadStart url=$url mime=$mimeType disp=$contentDisposition")
 
                     val isHtmlInterstitial =
                         mimeType?.startsWith("text/html", ignoreCase = true) == true ||
@@ -242,6 +277,14 @@ class ABDMWebViewClient(
             scope.launch(Dispatchers.Main) {
                 val pageUrl = view?.url ?: view?.originalUrl
                 val headers = request.requestHeaders.toMutableMap()
+
+                // Strip the X-Requested-With header that WebView adds
+                // automatically (containing the app package name).  Link
+                // shorteners use it as a secondary WebView detector.
+                headers.keys.firstOrNull {
+                    it.equals("X-Requested-With", ignoreCase = true)
+                }?.let { headers.remove(it) }
+
                 if (headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
                     view?.settings?.userAgentString
                         ?.takeIf { it.isNotBlank() }
@@ -276,10 +319,49 @@ class ABDMWebViewClient(
         favicon: Bitmap?,
     ) {
         super.onPageStarted(view, url, favicon)
+        Log.d(TAG, "onPageStarted url=$url")
+        logCookiePresence(url)
         if (url != null) {
             (view as? ABDMWebView)?.tabId?.let { tabId ->
                 mediaCatcher.onPageNavigation(tabId, url)
             }
+        }
+    }
+
+    override fun onPageFinished(view: WebView, url: String?) {
+        super.onPageFinished(view, url)
+        Log.d(TAG, "onPageFinished url=$url title=${view.title}")
+    }
+
+    override fun onReceivedError(
+        view: WebView,
+        request: WebResourceRequest?,
+        error: WebResourceError?,
+    ) {
+        super.onReceivedError(view, request, error)
+        if (request?.isForMainFrame == true) {
+            Log.w(
+                TAG,
+                "onReceivedError url=${request.url}" +
+                    " code=${error?.errorCode}" +
+                    " desc=${error?.description}",
+            )
+        }
+    }
+
+    override fun onReceivedHttpError(
+        view: WebView,
+        request: WebResourceRequest?,
+        errorResponse: WebResourceResponse?,
+    ) {
+        super.onReceivedHttpError(view, request, errorResponse)
+        if (request?.isForMainFrame == true) {
+            Log.w(
+                TAG,
+                "onReceivedHttpError url=${request.url}" +
+                    " status=${errorResponse?.statusCode}" +
+                    " reason=${errorResponse?.reasonPhrase}",
+            )
         }
     }
 
@@ -289,9 +371,22 @@ class ABDMWebViewClient(
     ): Boolean {
 
         val url = request.url.toString()
+        val scheme = request.url.scheme.orEmpty()
+        val isMainFrame = request.isForMainFrame
+        val hasGesture = request.hasGesture()
+
+        Log.d(
+            TAG,
+            "shouldOverrideUrlLoading" +
+                " url=$url" +
+                " scheme=$scheme" +
+                " mainFrame=$isMainFrame" +
+                " gesture=$hasGesture",
+        )
 
         // Let WebView load normal web pages.
         if (isHttpWebUrl(url)) {
+            Log.d(TAG, "  -> allow (http/https)")
             return false
         }
 
@@ -300,9 +395,12 @@ class ABDMWebViewClient(
         // HTTP(S) destination so the redirect chain remains inside ABDM and
         // keeps the current cookies/session.
         extractHttpWebFallback(url)?.let { webTarget ->
+            Log.d(TAG, "  -> extracted fallback: $webTarget")
             view.loadUrl(webTarget)
             return true
         }
+
+        Log.d(TAG, "  -> external intent")
 
         // No usable web fallback was carried by the URI. Only now hand the
         // deep link to an external app as a last resort.
@@ -318,7 +416,7 @@ class ABDMWebViewClient(
                 view.context.startActivity(intent)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Intent launch failed: $url", e)
         }
 
         return true
@@ -335,6 +433,12 @@ class ABDMChromeClient(
         isUserGesture: Boolean,
         resultMsg: Message?
     ): Boolean {
+        Log.d(
+            TAG,
+            "onCreateWindow isDialog=$isDialog" +
+                " isUserGesture=$isUserGesture" +
+                " opener=${view?.url}",
+        )
         if (view == null) return false
         val transport = (resultMsg?.obj as? WebView.WebViewTransport) ?: return false
         val newTab = browserComponent.newTab(
@@ -349,6 +453,11 @@ class ABDMChromeClient(
         resultMsg.sendToTarget()
         return true
     }
+
+    override fun onReceivedTitle(view: WebView, title: String?) {
+        super.onReceivedTitle(view, title)
+        Log.d(TAG, "onReceivedTitle title=$title url=${view.url}")
+    }
 }
 
 class ABDMWebView(
@@ -356,4 +465,45 @@ class ABDMWebView(
 ) : WebView(context) {
     var openedBy: String? = null
     var tabId: String? = null
+}
+
+/**
+ * Strips the Android WebView markers from the default User-Agent string.
+ *
+ * The default WebView UA looks like:
+ *   Mozilla/5.0 (Linux; Android 14; … Build/…; **wv**) AppleWebKit/537.36
+ *   (KHTML, like Gecko) **Version/4.0** Chrome/130.0.0.0 Mobile Safari/537.36
+ *
+ * Link shorteners (ShortXLinks / AdLinkFly) test `navigator.userAgent` for
+ * the `; wv)` and `Version/4.0` tokens and display a "Redirecting to Chrome"
+ * interstitial when they detect an embedded WebView.
+ *
+ * This function produces a User-Agent that looks like standard Chrome Mobile:
+ *   Mozilla/5.0 (Linux; Android 14; …) AppleWebKit/537.36 (KHTML, like Gecko)
+ *   Chrome/130.0.0.0 Mobile Safari/537.36
+ */
+internal fun normalizeWebViewUserAgent(ua: String): String {
+    var result = ua
+    // Remove "; wv" (with any surrounding whitespace before the closing paren)
+    result = result.replace(Regex("""\s*;\s*wv\b"""), "")
+    // Remove "Version/4.0 " (legacy WebView identifier)
+    result = result.replace(Regex("""Version/4\.0\s*"""), "")
+    // Collapse any resulting double-spaces
+    result = result.replace("  ", " ")
+    return result.trim()
+}
+
+/**
+ * Logs whether cookies exist for the given URL. Does NOT log values.
+ */
+private fun logCookiePresence(url: String?) {
+    if (url == null) return
+    try {
+        val cookie = CookieManager.getInstance().getCookie(url)
+        val present = !cookie.isNullOrBlank()
+        val count = if (present) cookie!!.split(";").size else 0
+        Log.d(TAG, "cookies for $url present=$present count=$count")
+    } catch (e: Exception) {
+        Log.d(TAG, "cookies for $url error=${e.message}")
+    }
 }

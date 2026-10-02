@@ -270,6 +270,13 @@ fun extractHttpWebFallback(rawUrl: String): String? {
         uri.getQueryParameter("url")
             ?.takeIf(::isHttpWebUrl)
             ?.let { return it }
+
+        // googlechrome://https://example.com — the real URL is the
+        // scheme-specific part (everything after "googlechrome://").
+        val ssp = uri.schemeSpecificPart?.removePrefix("//")
+        if (ssp != null && isHttpWebUrl(ssp)) {
+            return ssp
+        }
     }
 
     for (key in WEB_TARGET_QUERY_KEYS) {
