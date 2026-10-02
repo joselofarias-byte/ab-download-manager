@@ -573,6 +573,10 @@ private fun injectShortLinkAutomation(view: WebView, rawUrl: String) {
         host == "shortxlinks.com" || host.endsWith(".shortxlinks.com") -> {
             view.evaluateJavascript(shortLinksGoHookScript(), null)
         }
+
+        host == "devuploads.com" || host.endsWith(".devuploads.com") -> {
+            view.evaluateJavascript(devUploadsAutomationScript(), null)
+        }
     }
 }
 
@@ -735,7 +739,148 @@ private fun shortLinksGoHookScript(): String = """
     };
   } catch (_) {}
 
+  const hasHumanVerification = () => {
+    try {
+      return !!document.querySelector(
+        '.g-recaptcha, [data-sitekey], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], [class*="captcha" i], [id*="captcha" i]'
+      );
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const isVisible = (el) => {
+    if (!el || el.disabled) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 1 && rect.height > 1;
+  };
+
+  const getLabel = (el) => String(
+    el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || ''
+  ).replace(/\s+/g, ' ').trim();
+
+  let clickChecks = 0;
+  const clickTimer = setInterval(() => {
+    clickChecks++;
+
+    if (hasHumanVerification()) {
+      clearInterval(clickTimer);
+      log('human verification detected; waiting for user');
+      return;
+    }
+
+    const candidates = Array.from(document.querySelectorAll(
+      'a.get-link, #btn-get-link, #get-link-btn, button#go-submit, button, a.btn, input[type="submit"]'
+    ));
+
+    const button = candidates.find((el) => {
+      if (!isVisible(el)) return false;
+      const label = getLabel(el);
+      return /^(obtener\s+v[ií]nculo|get\s*link|continuar|continue)$/i.test(label);
+    });
+
+    if (button) {
+      clearInterval(clickTimer);
+      log('auto-click ShortXLinks button: ' + getLabel(button));
+      button.click();
+      return;
+    }
+
+    if (clickChecks >= 120) {
+      clearInterval(clickTimer);
+      log('ShortXLinks button not found after 90s');
+    }
+  }, 750);
+
   log('ShortXLinks /links/go hook ready');
+})();
+""".trimIndent()
+
+private fun devUploadsAutomationScript(): String = """
+(() => {
+  if (window.__abdmDevUploadsAutomationInstalled) return;
+  window.__abdmDevUploadsAutomationInstalled = true;
+
+  const log = (m) => {
+    try { window.ABDMShortLink && window.ABDMShortLink.log(String(m)); } catch (_) {}
+  };
+
+  const hasHumanVerification = () => {
+    try {
+      return !!document.querySelector(
+        '.g-recaptcha, [data-sitekey], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], [class*="captcha" i], [id*="captcha" i]'
+      );
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const isVisible = (el) => {
+    if (!el || el.disabled) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 1 && rect.height > 1;
+  };
+
+  const labelOf = (el) => String(
+    el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || ''
+  ).replace(/\s+/g, ' ').trim();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'abdm-devuploads-progress';
+  overlay.style.cssText = [
+    'position:fixed','inset:0','z-index:2147483647',
+    'background:#111','color:#fff','display:flex',
+    'align-items:center','justify-content:center',
+    'font-family:sans-serif','text-align:center','padding:24px'
+  ].join(';');
+  overlay.innerHTML = '<div style="max-width:420px;font-size:18px;line-height:1.45"><b>ABDM está preparando la descarga</b><div style="margin-top:10px;font-size:13px;opacity:.7">Esperando el botón gratuito de DevUploads…</div></div>';
+
+  if (document.body && !hasHumanVerification()) {
+    document.body.appendChild(overlay);
+  }
+
+  let checks = 0;
+  const timer = setInterval(() => {
+    checks++;
+
+    if (hasHumanVerification()) {
+      clearInterval(timer);
+      overlay.remove();
+      log('DevUploads human verification detected; waiting for user');
+      return;
+    }
+
+    const candidates = Array.from(document.querySelectorAll(
+      'button, a, input[type="submit"], input[type="button"]'
+    ));
+
+    const freeButton = candidates.find((el) => {
+      if (!isVisible(el)) return false;
+      const label = labelOf(el);
+      if (/premium|prima|sponsor|advert|anuncio|ads?/i.test(label)) return false;
+      return /^(free\s*download|liberta\s+descarga|descarga\s+gratis|download\s+free|continue|continuar)$/i.test(label);
+    });
+
+    if (freeButton) {
+      clearInterval(timer);
+      log('auto-click DevUploads button: ' + labelOf(freeButton));
+      overlay.remove();
+      freeButton.click();
+      return;
+    }
+
+    if (checks >= 180) {
+      clearInterval(timer);
+      overlay.remove();
+      log('DevUploads free/continue button not found after 90s');
+    }
+  }, 500);
+
+  log('DevUploads automation ready');
 })();
 """.trimIndent()
 
