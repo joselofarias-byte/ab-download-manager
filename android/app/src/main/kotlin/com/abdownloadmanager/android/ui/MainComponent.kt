@@ -741,6 +741,14 @@ class MainComponent(
         sendEffect(MainAppEffects.StartActivity(intent))
     }
 
+    override fun openBrowser(urls: List<String>) {
+        val intent = BrowserActivity.createIntent(
+            context = context,
+            urls = urls,
+        )
+        sendEffect(MainAppEffects.StartActivity(intent))
+    }
+
     sealed interface MainAppEffects {
         data class StartActivity(val intent: Intent) : MainAppEffects
         data class SimpleNotificationNotification(val notificationModel: NotificationModel) : MainAppEffects
