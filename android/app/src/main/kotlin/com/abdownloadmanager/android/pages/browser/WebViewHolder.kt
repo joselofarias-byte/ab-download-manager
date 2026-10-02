@@ -99,8 +99,10 @@ class WebViewRegistry(
             if (normalizedUA != defaultUA) {
                 webView.settings.userAgentString = normalizedUA
                 Log.d(TAG, "UA normalized: $normalizedUA")
+                ShortLinkTrace.record("UA normalized: $normalizedUA")
             } else {
                 Log.d(TAG, "UA unchanged: $defaultUA")
+                ShortLinkTrace.record("UA unchanged: $defaultUA")
             }
 
             // Cross-domain redirect chains (shortxlinks.in → .com →
@@ -137,6 +139,7 @@ class WebViewRegistry(
                         return@launch
                     }
                     Log.d(TAG, "onDownloadStart url=$url mime=$mimeType disp=$contentDisposition")
+                    ShortLinkTrace.record("onDownloadStart url=$url mime=$mimeType disp=$contentDisposition")
 
                     val isHtmlInterstitial =
                         mimeType?.startsWith("text/html", ignoreCase = true) == true ||
@@ -320,6 +323,7 @@ class ABDMWebViewClient(
     ) {
         super.onPageStarted(view, url, favicon)
         Log.d(TAG, "onPageStarted url=$url")
+        ShortLinkTrace.record("onPageStarted url=$url")
         logCookiePresence(url)
         if (url != null) {
             (view as? ABDMWebView)?.tabId?.let { tabId ->
@@ -331,6 +335,7 @@ class ABDMWebViewClient(
     override fun onPageFinished(view: WebView, url: String?) {
         super.onPageFinished(view, url)
         Log.d(TAG, "onPageFinished url=$url title=${view.title}")
+        ShortLinkTrace.record("onPageFinished url=$url title=${view.title}")
     }
 
     override fun onReceivedError(
@@ -340,12 +345,11 @@ class ABDMWebViewClient(
     ) {
         super.onReceivedError(view, request, error)
         if (request?.isForMainFrame == true) {
-            Log.w(
-                TAG,
-                "onReceivedError url=${request.url}" +
-                    " code=${error?.errorCode}" +
-                    " desc=${error?.description}",
-            )
+            val message = "onReceivedError url=${request.url}" +
+                " code=${error?.errorCode}" +
+                " desc=${error?.description}"
+            Log.w(TAG, message)
+            ShortLinkTrace.record(message)
         }
     }
 
@@ -356,12 +360,11 @@ class ABDMWebViewClient(
     ) {
         super.onReceivedHttpError(view, request, errorResponse)
         if (request?.isForMainFrame == true) {
-            Log.w(
-                TAG,
-                "onReceivedHttpError url=${request.url}" +
-                    " status=${errorResponse?.statusCode}" +
-                    " reason=${errorResponse?.reasonPhrase}",
-            )
+            val message = "onReceivedHttpError url=${request.url}" +
+                " status=${errorResponse?.statusCode}" +
+                " reason=${errorResponse?.reasonPhrase}"
+            Log.w(TAG, message)
+            ShortLinkTrace.record(message)
         }
     }
 
@@ -375,18 +378,18 @@ class ABDMWebViewClient(
         val isMainFrame = request.isForMainFrame
         val hasGesture = request.hasGesture()
 
-        Log.d(
-            TAG,
-            "shouldOverrideUrlLoading" +
-                " url=$url" +
-                " scheme=$scheme" +
-                " mainFrame=$isMainFrame" +
-                " gesture=$hasGesture",
-        )
+        val navigationMessage = "shouldOverrideUrlLoading" +
+            " url=$url" +
+            " scheme=$scheme" +
+            " mainFrame=$isMainFrame" +
+            " gesture=$hasGesture"
+        Log.d(TAG, navigationMessage)
+        ShortLinkTrace.record(navigationMessage)
 
         // Let WebView load normal web pages.
         if (isHttpWebUrl(url)) {
             Log.d(TAG, "  -> allow (http/https)")
+            ShortLinkTrace.record("allow http/https url=$url")
             return false
         }
 
@@ -396,11 +399,13 @@ class ABDMWebViewClient(
         // keeps the current cookies/session.
         extractHttpWebFallback(url)?.let { webTarget ->
             Log.d(TAG, "  -> extracted fallback: $webTarget")
+            ShortLinkTrace.record("extracted fallback from=$url to=$webTarget")
             view.loadUrl(webTarget)
             return true
         }
 
         Log.d(TAG, "  -> external intent")
+        ShortLinkTrace.record("external intent url=$url")
 
         // No usable web fallback was carried by the URI. Only now hand the
         // deep link to an external app as a last resort.
@@ -417,6 +422,7 @@ class ABDMWebViewClient(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Intent launch failed: $url", e)
+            ShortLinkTrace.record("Intent launch failed url=$url error=${e.message}")
         }
 
         return true
@@ -433,12 +439,11 @@ class ABDMChromeClient(
         isUserGesture: Boolean,
         resultMsg: Message?
     ): Boolean {
-        Log.d(
-            TAG,
-            "onCreateWindow isDialog=$isDialog" +
-                " isUserGesture=$isUserGesture" +
-                " opener=${view?.url}",
-        )
+        val popupMessage = "onCreateWindow isDialog=$isDialog" +
+            " isUserGesture=$isUserGesture" +
+            " opener=${view?.url}"
+        Log.d(TAG, popupMessage)
+        ShortLinkTrace.record(popupMessage)
         if (view == null) return false
         val transport = (resultMsg?.obj as? WebView.WebViewTransport) ?: return false
         val newTab = browserComponent.newTab(
@@ -457,6 +462,7 @@ class ABDMChromeClient(
     override fun onReceivedTitle(view: WebView, title: String?) {
         super.onReceivedTitle(view, title)
         Log.d(TAG, "onReceivedTitle title=$title url=${view.url}")
+        ShortLinkTrace.record("onReceivedTitle title=$title url=${view.url}")
     }
 }
 
@@ -503,7 +509,9 @@ private fun logCookiePresence(url: String?) {
         val present = !cookie.isNullOrBlank()
         val count = if (present) cookie!!.split(";").size else 0
         Log.d(TAG, "cookies for $url present=$present count=$count")
+        ShortLinkTrace.record("cookies for $url present=$present count=$count")
     } catch (e: Exception) {
         Log.d(TAG, "cookies for $url error=${e.message}")
+        ShortLinkTrace.record("cookies for $url error=${e.message}")
     }
 }
