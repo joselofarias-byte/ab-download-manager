@@ -608,8 +608,27 @@ private fun genericDownloadAutomationScript(): String = """
     el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || ''
   ).replace(/\s+/g, ' ').trim();
 
+  const verificationSolved = () => {
+    try {
+      const tokens = [
+        'textarea[name="g-recaptcha-response"]',
+        'textarea[name="h-captcha-response"]',
+        'input[name="h-captcha-response"]',
+        'input[name="cf-turnstile-response"]',
+        'textarea[name="cf-turnstile-response"]'
+      ];
+      return tokens.some((selector) =>
+        Array.from(document.querySelectorAll(selector))
+          .some((el) => String(el.value || el.textContent || '').trim().length > 8)
+      );
+    } catch (_) {
+      return false;
+    }
+  };
+
   const hasHumanVerification = () => {
     try {
+      if (verificationSolved()) return false;
       const bodyText = String(document.body?.innerText || '').toLowerCase();
       const verified = /\bverified\b|\bverificado\b|verification complete|verificaci[oó]n completada/.test(bodyText);
       if (verified) return false;
@@ -664,14 +683,23 @@ private fun genericDownloadAutomationScript(): String = """
   let clicks = 0;
   let lastClickedSignature = '';
   let unchanged = 0;
+  let waitingForVerification = false;
 
   const timer = setInterval(() => {
     if (!document.body) return;
 
     if (hasHumanVerification()) {
-      if (unchanged % 10 === 0) log('generic resolver waiting for human verification');
-      unchanged++;
+      if (!waitingForVerification) {
+        waitingForVerification = true;
+        log('generic resolver paused for human verification; it will resume automatically');
+      }
       return;
+    }
+
+    if (waitingForVerification) {
+      waitingForVerification = false;
+      unchanged = 0;
+      log('generic resolver verification completed; resuming automatically');
     }
 
     const controls = Array.from(document.querySelectorAll(
@@ -906,10 +934,29 @@ private fun shortLinksGoHookScript(): String = """
     return rect.width > 1 && rect.height > 1;
   };
 
+  const verificationSolved = () => {
+    try {
+      const tokens = [
+        'textarea[name="g-recaptcha-response"]',
+        'textarea[name="h-captcha-response"]',
+        'input[name="h-captcha-response"]',
+        'input[name="cf-turnstile-response"]',
+        'textarea[name="cf-turnstile-response"]'
+      ];
+      return tokens.some((selector) =>
+        Array.from(document.querySelectorAll(selector))
+          .some((el) => String(el.value || el.textContent || '').trim().length > 8)
+      );
+    } catch (_) {
+      return false;
+    }
+  };
+
   const hasHumanVerification = () => {
     try {
+      if (verificationSolved()) return false;
       const bodyText = String(document.body?.innerText || '').toLowerCase();
-      if (/\bverified\b|\bverificado\b/.test(bodyText)) return false;
+      if (/\bverified\b|\bverificado\b|verification complete|verificaci[oó]n completada/.test(bodyText)) return false;
 
       const selectors = [
         '.g-recaptcha',
@@ -939,14 +986,23 @@ private fun shortLinksGoHookScript(): String = """
   ).replace(/\s+/g, ' ').trim();
 
   let clickChecks = 0;
+  let waitingForVerification = false;
   const clickTimer = setInterval(() => {
-    clickChecks++;
-
     if (hasHumanVerification()) {
-      clearInterval(clickTimer);
-      log('human verification detected; waiting for user');
+      if (!waitingForVerification) {
+        waitingForVerification = true;
+        log('human verification detected; waiting for user and preserving the session');
+      }
       return;
     }
+
+    if (waitingForVerification) {
+      waitingForVerification = false;
+      clickChecks = 0;
+      log('human verification completed; resuming ShortXLinks automatically');
+    }
+
+    clickChecks++;
 
     const candidates = Array.from(document.querySelectorAll(
       'a.get-link, #btn-get-link, #get-link-btn, button#go-submit, button, a.btn, input[type="submit"]'
@@ -992,14 +1048,33 @@ private fun devUploadsAutomationScript(): String = """
     return rect.width > 1 && rect.height > 1;
   };
 
+  const verificationSolved = () => {
+    try {
+      const tokens = [
+        'textarea[name="g-recaptcha-response"]',
+        'textarea[name="h-captcha-response"]',
+        'input[name="h-captcha-response"]',
+        'input[name="cf-turnstile-response"]',
+        'textarea[name="cf-turnstile-response"]'
+      ];
+      return tokens.some((selector) =>
+        Array.from(document.querySelectorAll(selector))
+          .some((el) => String(el.value || el.textContent || '').trim().length > 8)
+      );
+    } catch (_) {
+      return false;
+    }
+  };
+
   const hasHumanVerification = () => {
     try {
+      if (verificationSolved()) return false;
       const bodyText = String(document.body?.innerText || '').toLowerCase();
 
       // DevUploads keeps challenge-related markup in the DOM even after the
       // user/session has already been verified. Do not treat stale/hidden
       // captcha nodes as an active challenge.
-      if (/\bverified\b|\bverificado\b/.test(bodyText)) return false;
+      if (/\bverified\b|\bverificado\b|verification complete|verificaci[oó]n completada/.test(bodyText)) return false;
 
       const selectors = [
         '.g-recaptcha',
@@ -1036,21 +1111,33 @@ private fun devUploadsAutomationScript(): String = """
 
   let checks = 0;
   let verifiedLogged = false;
+  let waitingForVerification = false;
   const timer = setInterval(() => {
-    checks++;
-
     const bodyText = String(document.body?.innerText || '').toLowerCase();
-    if (!verifiedLogged && /\bverified\b|\bverificado\b/.test(bodyText)) {
+    if (!verifiedLogged && /\bverified\b|\bverificado\b|verification complete|verificaci[oó]n completada/.test(bodyText)) {
       verifiedLogged = true;
       log('DevUploads verified state observed; continuing automation');
     }
 
     if (hasHumanVerification()) {
-      clearInterval(timer);
       overlay.remove();
-      log('DevUploads human verification detected; waiting for user');
+      if (!waitingForVerification) {
+        waitingForVerification = true;
+        log('DevUploads human verification detected; waiting for user and preserving the session');
+      }
       return;
     }
+
+    if (waitingForVerification) {
+      waitingForVerification = false;
+      checks = 0;
+      log('DevUploads human verification completed; resuming automatically');
+      if (document.body && !document.getElementById('abdm-devuploads-progress')) {
+        document.body.appendChild(overlay);
+      }
+    }
+
+    checks++;
 
     const candidates = Array.from(document.querySelectorAll(
       'button, a, input[type="submit"], input[type="button"], [role="button"], .btn, [onclick]'
