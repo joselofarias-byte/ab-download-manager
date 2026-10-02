@@ -2,6 +2,7 @@ package com.abdownloadmanager.android.pages.browser
 
 import android.content.Context
 import android.os.Environment
+import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.WebSettings
 import com.yausername.ffmpeg.FFmpeg
@@ -27,6 +28,9 @@ class MediaPageDownloader(
 ) {
     @Volatile
     private var initialized = false
+
+    @Volatile
+    private var ytDlpUpdateChecked = false
 
     suspend fun downloadBestVideo(
         pageUrl: String,
@@ -153,8 +157,41 @@ class MediaPageDownloader(
     private fun ensureInitialized() {
         if (initialized) return
 
-        YoutubeDL.getInstance().init(context.applicationContext)
-        FFmpeg.getInstance().init(context.applicationContext)
+        val appContext = context.applicationContext
+        val youtubeDL = YoutubeDL.getInstance()
+
+        youtubeDL.init(appContext)
+        FFmpeg.getInstance().init(appContext)
+
+        if (!ytDlpUpdateChecked) {
+            ytDlpUpdateChecked = true
+            val before = runCatching {
+                youtubeDL.versionName(appContext)
+            }.getOrNull()
+
+            runCatching {
+                val status = youtubeDL.updateYoutubeDL(
+                    appContext,
+                    YoutubeDL.UpdateChannel._STABLE,
+                )
+                val after = runCatching {
+                    youtubeDL.versionName(appContext)
+                }.getOrNull()
+
+                Log.i(
+                    TAG,
+                    "yt-dlp stable update check status=$status before=$before after=$after",
+                )
+            }.onFailure { error ->
+                // Keep the bundled yt-dlp as an offline fallback. A failed
+                // update check must not make media downloading unavailable.
+                Log.w(
+                    TAG,
+                    "yt-dlp stable update check failed; using bundled version=$before",
+                    error,
+                )
+            }
+        }
 
         initialized = true
     }
@@ -191,3 +228,5 @@ data class MediaPageDownloadResult(
     val mode: MediaPageDownloadMode,
     val outputDirectory: String,
 )
+
+private const val TAG = "ABDM_MEDIA_PAGE"
