@@ -217,6 +217,9 @@ class WebViewRegistry(
                     if (!webView.canGoBack() && webView.originalUrl == null) {
                         browserComponent.closeTab(tab.tabId)
                     }
+                    if (ShortLinkTrace.isTabActive(tab.tabId)) {
+                        ShortLinkTrace.record("direct-download url=$url")
+                    }
                     browserComponent.downloadInterceptor.onDownloadStart(
                         url,
                         userAgent,
@@ -386,6 +389,18 @@ class ABDMWebViewClient(
         Log.d(TAG, navigationMessage)
         ShortLinkTrace.record(navigationMessage)
 
+        val shortLinkMode = ShortLinkTrace.isTabActive((view as? ABDMWebView)?.tabId)
+        if (shortLinkMode && isMainFrame && isHttpWebUrl(url)) {
+            extractShortXLinksFastForward(url)
+                ?.takeIf { it != url }
+                ?.let { target ->
+                    Log.d(TAG, "  -> ShortXLinks fast-forward: $target")
+                    ShortLinkTrace.record("fast-forward from=$url to=$target")
+                    view.loadUrl(target)
+                    return true
+                }
+        }
+
         // Let WebView load normal web pages.
         if (isHttpWebUrl(url)) {
             Log.d(TAG, "  -> allow (http/https)")
@@ -445,6 +460,20 @@ class ABDMChromeClient(
         Log.d(TAG, popupMessage)
         ShortLinkTrace.record(popupMessage)
         if (view == null) return false
+
+        val openerTabId = (view as? ABDMWebView)?.tabId
+        val openerHost = runCatching {
+            Uri.parse(view.url).host.orEmpty().lowercase()
+        }.getOrDefault("")
+        if (
+            ShortLinkTrace.isTabActive(openerTabId) &&
+            (openerHost == "devuploads.com" || openerHost.endsWith(".devuploads.com"))
+        ) {
+            Log.d(TAG, "  -> blocked DevUploads popup in ShortXLinks mode")
+            ShortLinkTrace.record("blocked popup opener=${view.url}")
+            return false
+        }
+
         val transport = (resultMsg?.obj as? WebView.WebViewTransport) ?: return false
         val newTab = browserComponent.newTab(
             id = UUID.randomUUID().toString(),
