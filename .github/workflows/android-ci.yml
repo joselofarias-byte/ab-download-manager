@@ -52,6 +52,9 @@ jobs:
           echo "ABDM_TEST_DEBUG_KEY_ALIAS=abdm-test-debug" >> "$GITHUB_ENV"
           echo "ABDM_TEST_DEBUG_KEY_PASSWORD=abdmtest2026" >> "$GITHUB_ENV"
 
+      - name: Test browser bridge
+        run: ./gradlew :android:app:testDebugUnitTest --stacktrace
+
       - name: Assemble Android debug APK
         run: ./gradlew :android:app:assembleDebug --stacktrace
 
@@ -61,4 +64,30 @@ jobs:
         with:
           name: abdm-media-catcher-debug
           path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  browser-extension:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Prepare pinned browser extension
+        run: |
+          git clone https://github.com/amir1376/ab-download-manager-browser-integration.git "$RUNNER_TEMP/browser-extension"
+          git -C "$RUNNER_TEMP/browser-extension" checkout 1871203ce9665ea6802e8d1328f8b70c7dc9d948
+          python android/browser-extension/prepare.py "$RUNNER_TEMP/browser-extension"
+      - name: Build Android browser bundles
+        working-directory: ${{ runner.temp }}/browser-extension
+        run: |
+          npm ci
+          npm run pack:chrome
+          npm run pack:firefox
+          node -e 'for (const b of ["chrome", "firefox"]) { const m = require(`./dist/${b}/manifest.json`); if (m.permissions.includes("nativeMessaging")) throw Error("Unexpected native messaging"); if (b === "firefox" && !m.browser_specific_settings.gecko_android) throw Error("Missing Android declaration"); }'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: abdm-android-browser-extensions
+          path: ${{ runner.temp }}/browser-extension/dist/*.zip
           if-no-files-found: error

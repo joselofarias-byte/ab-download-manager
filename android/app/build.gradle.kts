@@ -74,6 +74,9 @@ android {
 }
 
 dependencies {
+    implementation(libs.ktor.server.cio)
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("io.ktor:ktor-server-test-host:${libs.versions.ktor.get()}")
     implementation(libs.compose.runtime)
     implementation(libs.compose.foundation)
     implementation(libs.androidx.activity.compose)

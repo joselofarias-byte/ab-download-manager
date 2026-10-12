@@ -21,6 +21,7 @@ class ABDMApp : Application(), KoinComponent {
     val appRepository: BaseAppRepository by inject()
     val previousVersion: PreviousVersion by inject()
     val scope: CoroutineScope by inject()
+    private val browserBridge: com.abdownloadmanager.android.integration.AndroidBrowserBridge by inject()
     override fun onCreate() {
         super.onCreate()
         AppInfo.init(this)
@@ -41,5 +42,6 @@ class ABDMApp : Application(), KoinComponent {
             )
         )
         appManager.boot()
+        browserBridge.boot()
     }
 }

@@ -13,6 +13,10 @@ import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
 sealed interface KeepAliveServiceReason {
+    data object BrowserIntegration : KeepAliveServiceReason {
+        override fun getKeyChanges() = Unit
+        override fun getReasonString() = Res.string.settings_browser_integration.asStringSource().getString()
+    }
     fun getKeyChanges(): Any
     fun getReasonString(): String
     data class ActiveDownloads(val count: Int) : KeepAliveServiceReason {

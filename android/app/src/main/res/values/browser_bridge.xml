@@ -1,0 +1,6 @@
+<resources>
+    <string name="browser_bridge_stopped">Browser integration stopped</string>
+    <string name="browser_bridge_invalid">Check the browser integration port and API key</string>
+    <string name="browser_bridge_failed">Browser integration could not start; check whether the port is in use</string>
+    <string name="browser_bridge_inbox">Open pending browser downloads</string>
+</resources>
