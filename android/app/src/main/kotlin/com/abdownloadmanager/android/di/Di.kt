@@ -449,6 +449,9 @@ val startUpModule = module {
 }
 
 fun getAppModule(context: ABDMApp) = module {
+    single {
+        com.abdownloadmanager.android.integration.AndroidBrowserBridge(get(), get(), get(), get(), get(), get())
+    }
     includes(downloaderModule)
     includes(downloadSystemModule)
     includes(coroutineModule)

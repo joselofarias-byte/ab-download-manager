@@ -103,6 +103,12 @@ fun SettingsPage(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Spacer(Modifier.height(topPadding))
+                    val bridgeStatus by settingsComponent.browserBridge.status.collectAsState()
+                    androidx.compose.foundation.text.BasicText(
+                        bridgeStatus,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        style = androidx.compose.ui.text.TextStyle(color = myColors.onBackground),
+                    )
                     val configurableGroups by settingsComponent.configurables.collectAsState()
                     for (cfgGroup in configurableGroups) {
                         RenderConfigurableGroup(

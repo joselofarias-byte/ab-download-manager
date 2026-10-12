@@ -27,6 +27,7 @@ class AndroidSettingsComponent(
     ctx
 ), KoinComponent {
     private val appSettings by inject<AppSettingsStorage>()
+    val browserBridge by inject<com.abdownloadmanager.android.integration.AndroidBrowserBridge>()
     //    private val pageStorage by inject<PageStatesStorage>()
     private val appRepository by inject<BaseAppRepository>()
     private val proxyManager by inject<ProxyManager>()
@@ -139,14 +140,16 @@ class AndroidSettingsComponent(
                 )
             ),
 
-            // browser integration
-            // disabled for now
-//            ConfigurableGroup(
-//                nestedConfigurable = listOf(
-//                    CommonSettings.browserIntegrationEnabled(appRepository),
-//                    CommonSettings.browserIntegrationPort(appRepository)
-//                )
-//            )
+            ConfigurableGroup(
+                mainConfigurable = CommonSettings.browserIntegrationEnabled(appRepository),
+                nestedVisible = appRepository.apiEnabled,
+                nestedConfigurable = listOf(
+                    AndroidSettings.browserBridgePort(appSettings),
+                    CommonSettings.apiAuthKey(appRepository),
+                    AndroidSettings.copyBrowserBridgeKey(appSettings),
+                    AndroidSettings.browserInbox(browserBridge),
+                )
+            ),
         )
     )
 

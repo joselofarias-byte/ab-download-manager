@@ -109,6 +109,9 @@
                 android:windowSoftInputMode="adjustResize"
         />
 
+        <activity android:name=".integration.BrowserImportActivity" android:exported="false"
+                android:theme="@style/Theme.ABDownloadManager.Transparent" />
+
         <service
                 android:name=".service.DownloadSystemService"
                 android:exported="false"

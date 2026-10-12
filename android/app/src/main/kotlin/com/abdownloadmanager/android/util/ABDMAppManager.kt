@@ -399,7 +399,8 @@ class ABDMAppManager(
         downloadSystem.queueManager.activeQueuesFlow(),
         downloadSystem.queueManager.queueModelsFlow(),
         ApplicationBackgroundTracker.isInBackgroundFlow,
-    ) { activeDownloads, activeQueues, queueModels, isInBackground ->
+        appSettingsStorage.apiEnabled,
+    ) { activeDownloads, activeQueues, queueModels, isInBackground, browserIntegrationEnabled ->
         if (activeQueues.isNotEmpty()) {
             return@combine KeepAliveServiceReason.ActiveQueue(activeQueues.map { it.getQueueModel() })
         }
@@ -412,6 +413,9 @@ class ABDMAppManager(
         }
         if (!isInBackground) {
             return@combine KeepAliveServiceReason.AppIsInForeground
+        }
+        if (browserIntegrationEnabled) {
+            return@combine KeepAliveServiceReason.BrowserIntegration
         }
         return@combine null
     }

@@ -12,6 +12,31 @@ import kotlinx.coroutines.flow.MutableStateFlow
 
 
 object AndroidSettings {
+    fun browserBridgePort(settings: AppSettingsStorage) =
+        com.abdownloadmanager.shared.ui.configurable.item.IntConfigurable(
+            title = Res.string.settings_browser_integration_server_port.asStringSource(),
+            description = Res.string.settings_browser_integration_server_port_description.asStringSource(),
+            backedBy = settings.apiPort,
+            describe = { it.toString().asStringSource() },
+            range = 1024..65000,
+        )
+
+    fun copyBrowserBridgeKey(settings: AppSettingsStorage) = NavigatableConfigurable(
+        title = Res.string.copy.asStringSource(),
+        description = Res.string.settings_api_auth_key.asStringSource(),
+        onRequestNavigate = {
+            val context = com.abdownloadmanager.android.util.AppInfo.context
+            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("AB DM", settings.apiAuthKey.value))
+        },
+    )
+
+    fun browserInbox(bridge: com.abdownloadmanager.android.integration.AndroidBrowserBridge) = NavigatableConfigurable(
+        title = com.abdownloadmanager.android.util.AppInfo.context.getString(com.abdownloadmanager.android.R.string.browser_bridge_inbox).asStringSource(),
+        description = Res.string.settings_browser_integration.asStringSource(),
+        onRequestNavigate = bridge::openOldest,
+    )
+
     fun permissionSettings(
         permissionsPageManager: PermissionsPageManager
     ): NavigatableConfigurable {
