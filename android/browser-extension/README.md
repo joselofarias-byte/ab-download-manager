@@ -10,6 +10,10 @@ Las peticiones se guardan primero en almacenamiento privado (hasta 32 pendientes
 
 GitHub Actions construye la APK y los ZIP chrome/firefox del overlay. La base experimental conserva ARM64 y la clave de firma debug de pruebas existente. Para construir la extensión manualmente, clonar su upstream, hacer checkout del commit indicado en prepare.py, ejecutar `python prepare.py <directorio>` y luego `npm ci`, `npm run pack:chrome`, `npm run pack:firefox` desde ese directorio.
 
+## Quetta
+
+El usuario ya tiene Quetta. Como primera prueba puede instalar la extensión oficial AB Download Manager Browser Integration desde Chrome Web Store dentro de Quetta y configurar puerto 15151 y API key de esta APK. La extensión oficial ya dispone de transporte HTTP y puede usarse sin instalar nuestro ZIP si Quetta soporta sus APIs. Su timeout es 500 ms y conserva el intento de Native Messaging. El ZIP Chromium de esta rama es una alternativa experimental con HTTP exclusivamente y timeout de 2 segundos; su instalación depende de que el navegador admita paquetes locales.
+
 ## Pruebas físicas
 
 1. Habilitar receptor y comprobar conexión desde la extensión con clave correcta/incorrecta.

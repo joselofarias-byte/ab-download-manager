@@ -96,7 +96,7 @@ class AndroidBrowserBridge(
                 val props = request.items.distinctBy { it.link }.map { item ->
                     val source = item.toUiProps()
                     val downloader = registry.getDownloaderOf(source.credentials) ?: error("Unsupported download")
-                    val name = FilenameFixer.fix(item.suggestedName
+                    val name = FilenameFixer.fix(item.suggestedName?.takeIf { it.isNotBlank() }
                         ?: item.link.substringBefore('?').substringAfterLast('/').ifBlank { "download" })
                     NewDownloadItemProps(
                         downloadItem = downloader.createBareDownloadItem(source.credentials,

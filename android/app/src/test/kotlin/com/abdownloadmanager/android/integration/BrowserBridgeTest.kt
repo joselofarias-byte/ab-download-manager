@@ -22,6 +22,7 @@ class BrowserBridgeTest {
     @Test fun validatesUrlsHeadersAndBatchBounds() {
         for (body in listOf(valid.replace("https://example.org/file.m3u8", "file:///etc/passwd"),
             valid.replace("\"hls\"", "\"dash\""), valid.replace("session=private", "bad\\r\\nInjected: yes"),
+            valid.replace("video.ts", ".."),
             """{"items":[]}""", "{")) {
             assertTrue(runCatching { BrowserRequest.decode(body) }.isFailure)
         }

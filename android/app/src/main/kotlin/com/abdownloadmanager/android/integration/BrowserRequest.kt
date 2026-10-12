@@ -22,6 +22,8 @@ data class BrowserRequest(
                     require(isHttpUrl(item.link))
                     require(item.downloadPage == null || isHttpUrl(item.downloadPage))
                     require((item.suggestedName?.length ?: 0) <= 512)
+                    require(item.suggestedName == null || ('\u0000' !in item.suggestedName &&
+                        item.suggestedName.trim() !in setOf(".", "..")))
                     require((item.headers?.size ?: 0) <= 64)
                     item.headers?.forEach { (key, value) ->
                         require(key.matches(Regex("[!#$%&'*+.^_`|~0-9a-zA-Z-]{1,128}")))

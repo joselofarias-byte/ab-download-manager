@@ -151,8 +151,6 @@ class AndroidSettingsComponent(
                 )
             ),
         )
-//            )
-        )
     )
 
 }
